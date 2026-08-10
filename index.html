@@ -228,6 +228,7 @@ function newHostState(code){
     life:[],               // {id,owner,q,correct,decoys[],used}
     box:[],                // {id,level,text,used}
     cur:null,              // 當前回合
+    chall:{},              // 各玩家被挑戰次數（隨機抽人用加權）
     seen:[],               // 訊息去重
   };
 }
@@ -235,6 +236,7 @@ function hostSave(){ if(H) localStorage.setItem('cs_host_'+H.room, JSON.stringif
 function hostStart(code, restore){
   role='host'; document.body.classList.add('host');
   H = restore || newHostState(code);
+  H.chall = H.chall || {};   // 舊存檔相容
   room = H.room;
   connect(connBroker, ()=>{ broadcast(); renderHost(); });
   renderHost();
@@ -246,7 +248,8 @@ function pName(id){ return H.players[id] ? H.players[id].name : '？'; }
 function buildPub(){
   const ps = players().map(p=>({id:p.id,name:p.name,score:p.score,
     st:H.stupid.some(x=>x.author===p.id), lf:H.life.some(x=>x.owner===p.id),
-    bx:H.box.filter(x=>x.author===p.id).length }));
+    bx:H.box.filter(x=>x.author===p.id).length,
+    mb:H.box.filter(x=>!x.used && x.target===p.id).length }));
   const pub = {seq:++H.seq, room:H.room, phase:H.phase, sub:H.sub, players:ps, data:{}};
   const c = H.cur;
   if(H.phase==='s1' && c){
@@ -258,7 +261,7 @@ function buildPub(){
     if(H.sub==='reveal') pub.data=c.reveal;
   }
   if(H.phase==='s3' && c){
-    if(H.sub==='ask') pub.data={qid:c.qid, stage:c.stage, level:c.level, text:c.text, spin:c.spin,
+    if(H.sub==='ask') pub.data={qid:c.qid, stage:c.stage, level:c.level, text:c.text, spin:c.spin, targeted:!!c.targeted,
       targetId:c.target, targetName:pName(c.target),
       canDesignate:(H.players[c.target]?.score??0)>=0,
       designatorName:c.designator?pName(c.designator):null};
@@ -281,7 +284,8 @@ function migratePlayer(oldId,newId){
   H.players[newId]=H.players[oldId]; delete H.players[oldId];
   H.stupid.forEach(x=>{ if(x.author===oldId) x.author=newId; });
   H.life.forEach(x=>{ if(x.owner===oldId) x.owner=newId; });
-  H.box.forEach(x=>{ if(x.author===oldId) x.author=newId; });
+  H.box.forEach(x=>{ if(x.author===oldId) x.author=newId; if(x.target===oldId) x.target=newId; });
+  if(H.chall[oldId]!==undefined){ H.chall[newId]=H.chall[oldId]; delete H.chall[oldId]; }
   const c=H.cur;
   if(c){
     ['author','owner','target','designator'].forEach(k=>{ if(c[k]===oldId) c[k]=newId; });
@@ -317,10 +321,13 @@ function hostOnMsg(m){
       H.life.push({id:uid(), owner:pid, q:String(m.q||'').slice(0,120), correct:String(m.correct||'').slice(0,40),
         decoys:(m.decoys||[]).slice(0,3).map(x=>String(x).slice(0,40)), used:false});
       break;
-    case 'box':
+    case 'box':{
       if(H.phase==='final') return;
-      H.box.push({id:uid(), author:pid, level:[1,2,3].includes(m.level)?m.level:1, text:String(m.text||'').slice(0,160), used:false});
+      let tgt = (m.target && H.players[m.target]) ? m.target : null;
+      if(tgt && H.box.filter(x=>!x.used && x.target===tgt).length>=5) tgt=null;   // 信箱已滿 → 轉公共題
+      H.box.push({id:uid(), author:pid, target:tgt, level:[1,2,3].includes(m.level)?m.level:1, text:String(m.text||'').slice(0,160), used:false});
       break;
+    }
     case 'vote':{
       const c=H.cur;
       if(!c || m.qid!==c.qid || H.sub!=='vote') return;
@@ -429,18 +436,34 @@ function animateWheel(){
   clearTimeout(window.__spinT);
   window.__spinT=setTimeout(()=>{ role==='host'?renderHost():renderPlayer(); }, remain+250);
 }
+/* 對特定挑戰者可用的題目 = 公共未用 + 指定給他的未用 */
+function usableBox(target, lv){
+  return H.box.filter(x=>!x.used && (lv?x.level===lv:true) && (!x.target || x.target===target));
+}
 function s3Start(targetId){
-  if(!H.box.some(x=>!x.used)){ alert('問題箱沒有可用題目'); return; }
+  if(!usableBox(targetId).length){ alert('對這位挑戰者沒有可用題目'); return; }
+  H.chall[targetId]=(H.chall[targetId]||0)+1;
   H.phase='s3'; H.sub='ask';
-  H.cur={type:'s3', qid:uid(), target:targetId, stage:'spin', level:null, text:null, srcId:null, spin:null, designator:null};
+  H.cur={type:'s3', qid:uid(), target:targetId, stage:'spin', level:null, text:null, srcId:null, spin:null, designator:null, targeted:false};
+  broadcast(); renderHost();
+}
+/* 手動點燃：直接引爆某題指定題（跳過轉盤） */
+function s3Ignite(boxId){
+  const q=H.box.find(x=>x.id===boxId && !x.used); if(!q||!q.target||!H.players[q.target]) return;
+  H.chall[q.target]=(H.chall[q.target]||0)+1;
+  H.phase='s3'; H.sub='ask';
+  H.cur={type:'s3', qid:uid(), target:q.target, stage:'choose', level:q.level, text:q.text, srcId:q.id, spin:null, designator:null, targeted:true};
   broadcast(); renderHost();
 }
 function s3Spin(){
   const c=H.cur; if(!c||c.stage!=='spin') return;
-  const lvs=[1,2,3].filter(l=>H.box.some(x=>!x.used&&x.level===l));
+  const lvs=[1,2,3].filter(l=>usableBox(c.target,l).length);
   if(!lvs.length){ alert('問題箱沒有可用題目'); return; }
   const lv=lvs[Math.floor(Math.random()*lvs.length)];
-  const pool=H.box.filter(x=>!x.used&&x.level===lv);
+  /* 信箱優先：轉到的等級若有指定給挑戰者的題，先抽那些 */
+  let pool=H.box.filter(x=>!x.used && x.level===lv && x.target===c.target);
+  c.targeted=pool.length>0;
+  if(!pool.length) pool=H.box.filter(x=>!x.used && x.level===lv && !x.target);
   const q=pool[Math.floor(Math.random()*pool.length)];
   const idxs=WHEEL_SEGS.map((s,i)=>s===lv?i:-1).filter(i=>i>=0);
   const seg=idxs[Math.floor(Math.random()*idxs.length)];
@@ -454,7 +477,7 @@ function s3Apply(action, pid, designee){
   const deltas=[];
   const finish = label=>{
     const src=H.box.find(x=>x.id===c.srcId); if(src) src.used=true;
-    c.reveal={level:c.level, text:c.text, label, deltas};
+    c.reveal={level:c.level, text:c.text, label, deltas, targeted:!!c.targeted};
     H.sub='reveal'; broadcast(); renderHost();
   };
   if(c.stage==='spin'){
@@ -508,6 +531,8 @@ window.kick=(id)=>{
   delete H.players[id];
   H.stupid=H.stupid.filter(x=>x.author!==id);
   H.life=H.life.filter(x=>x.owner!==id);
+  H.box.forEach(x=>{ if(x.target===id) x.target=null; });   // 對象離場 → 指定題轉公共
+  delete H.chall[id];
   const c=H.cur;
   if(c){
     if(c.votes) delete c.votes[id];
@@ -645,6 +670,7 @@ function renderHost(){
         cur=`${wheelSvg()}<p class="spinhint">命運轉動中<span class="wait-dot"></span></p>`;
       } else if(c.stage==='choose'){
         cur=`<p class="big-q"><span class="tag ${LV[c.level].tag}">${LV[c.level].name}</span><br>「${esc(c.text)}」</p>
+          ${c.targeted?'<div class="banner ember">👀 匿名指定題</div>':''}
           <div class="banner hell">等待 ${esc(pName(c.target))} 抉擇中…</div>`;
       } else {
         cur=`<p class="big-q"><span class="tag ${LV[c.level].tag}">${LV[c.level].name}</span><br>「${esc(c.text)}」</p>
@@ -660,9 +686,11 @@ function renderHost(){
         if(!items.length) return '';
         return `<div style="margin-top:10px"><span class="tag ${LV[lv].tag}">${LV[lv].name}</span>`+
           items.map(q=>`<div class="pool-item ${q.used?'used':''}">
-            <div class="txt">${esc(q.text)}</div>
+            <div class="txt">${q.target?`<span class="tag" style="color:var(--hell);border-color:var(--hell)">🎯 ${esc(pName(q.target))}</span> `:''}${esc(q.text)}</div>
             ${q.used?'<span class="small-note">已使用</span>':`
             <div class="ops">
+              ${q.target?`<button class="btn sm hell" onclick="igniteBox('${q.id}')">🔥 點燃</button>
+              <button class="btn sm ghost" onclick="pubBox('${q.id}')">轉公共</button>`:''}
               <button class="btn sm ghost" onclick="editBox('${q.id}')">✏️</button>
               <button class="btn sm ghost" onclick="lvBox('${q.id}')">Lv切換</button>
               <button class="btn sm ghost" onclick="delBox('${q.id}')">🗑️</button>
@@ -671,10 +699,10 @@ function renderHost(){
       }).join('');
       panel=`<div class="card"><h3>🌕 第三階段・命運之輪</h3>
         ${revealHtml}
-        <label class="f">下一位挑戰者</label>
+        <label class="f">下一位挑戰者（🔥＝已被挑戰次數、📬＝信箱指定題）</label>
         <select id="s3target">
-          <option value="__rand__">🎲 隨機抽人</option>
-          ${ps.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+          <option value="__rand__">🎲 隨機抽人（被挑戰最少者優先）</option>
+          ${ps.map(p=>`<option value="${p.id}">${esc(p.name)}　🔥${H.chall[p.id]||0}　📬${H.box.filter(x=>!x.used&&x.target===p.id).length}</option>`).join('')}
         </select>
         <div style="margin-top:10px"><button class="btn hell" onclick="s3Begin()" ${unused&&ps.length?'':'disabled'}>🎡 交給命運之輪（剩 ${unused} 題）</button></div>
         <div class="divider"></div>
@@ -706,7 +734,7 @@ function renderHost(){
     ${stagebar(H.phase)}
     ${panel}
     <div class="card"><h3>📊 即時排名（可手動調整）</h3>${rankTable(ps,true)}
-      <div class="plist" style="margin-top:10px">${ps.map(p=>`<span class="pchip">${esc(p.name)} <span class="mytag">${['蠢','題','箱'].map((t,i)=>[p?H.stupid.some(x=>x.author===p.id):0,H.life.some(x=>x.owner===p.id),H.box.some(x=>x.author===p.id)][i]?`<span class="ok">${t}✓</span>`:'').join(' ')}</span></span>`).join('')||'<span class="small-note">等待玩家掃碼加入…</span>'}</div>
+      <div class="plist" style="margin-top:10px">${ps.map(p=>`<span class="pchip">${esc(p.name)} <span class="mytag">${['蠢','題','箱'].map((t,i)=>[H.stupid.some(x=>x.author===p.id),H.life.some(x=>x.owner===p.id),H.box.some(x=>x.author===p.id)][i]?`<span class="ok">${t}✓</span>`:'').join(' ')} 🔥${H.chall[p.id]||0} 📬${H.box.filter(x=>!x.used&&x.target===p.id).length}</span></span>`).join('')||'<span class="small-note">等待玩家掃碼加入…</span>'}</div>
     </div>
     ${H.phase!=='lobby'?`<div class="card"><h3>🔗 邀請</h3><div class="roomcode" style="font-size:22px">${H.room}</div><div id="qrbox"></div></div>`:''}`;
   const qb=$('#qrbox');
@@ -724,10 +752,18 @@ window.s3Begin=()=>{
   let tg=$('#s3target').value;
   const ps=players();
   if(!ps.length){ alert('還沒有玩家'); return; }
-  if(tg==='__rand__') tg=ps[Math.floor(Math.random()*ps.length)].id;
+  if(tg==='__rand__'){
+    /* 加權隨機：被挑戰次數最少者優先，火力自動攤平 */
+    const min=Math.min(...ps.map(p=>H.chall[p.id]||0));
+    const cand=ps.filter(p=>(H.chall[p.id]||0)===min);
+    tg=cand[Math.floor(Math.random()*cand.length)].id;
+  }
   if(!H.players[tg]){ alert('請選擇挑戰者'); return; }
   s3Start(tg);
 };
+window.igniteBox=(id)=>{ const q=H.box.find(x=>x.id===id); if(!q) return;
+  if(!confirm(`直接點燃這題指定題，讓 ${pName(q.target)} 面對它？（跳過轉盤）`)) return; s3Ignite(id); };
+window.pubBox=(id)=>{ const q=H.box.find(x=>x.id===id); if(!q) return; q.target=null; broadcast(); renderHost(); };
 window.s3Cancel=()=>{
   const c=H.cur;
   if(c && c.srcId){ const src=H.box.find(x=>x.id===c.srcId); if(src) src.used=true; }  // 題目已曝光就作廢
@@ -843,7 +879,9 @@ function playerPhaseHtml(){
             : `<p class="spinhint">命運轉動中<span class="wait-dot"></span></p>`}
         </div>`;
       }
-      const head=`<p class="big-q"><span class="tag ${LV[d.level].tag}">${LV[d.level].name}</span><br>「${esc(d.text)}」</p>`;
+      const victim = d.stage==='designated' ? d.designatorName : d.targetName;
+      const mark = d.targeted ? `<div class="banner ember">👀 這題是有人匿名指定要問 ${esc(victim)} 的</div>` : '';
+      const head=`<p class="big-q"><span class="tag ${LV[d.level].tag}">${LV[d.level].name}</span><br>「${esc(d.text)}」</p>`+mark;
       /* 被指定者的畫面：不經轉盤，直接抉擇 */
       if(d.stage==='designated'){
         if(d.targetId!==me.id) return `<div class="card"><h3>🌕 匿名問題箱</h3>${head}
@@ -874,6 +912,7 @@ function playerPhaseHtml(){
     }
     if(sub==='reveal') return `<div class="card"><h3>🌕 結果</h3>
       <p class="big-q"><span class="tag ${LV[d.level].tag}">${LV[d.level].name}</span><br>「${esc(d.text)}」</p>
+      ${d.targeted?'<p class="center small-note" style="color:var(--ember)">👀 這題來自匿名指定</p>':''}
       <p class="center small-note">${esc(d.label)}</p>
       ${deltasHtml(d.deltas)}
       <p class="center small-note wait-dot" style="margin-top:10px">等待主持人指定下一位</p></div>`;
@@ -918,7 +957,12 @@ function submitFormsHtml(){
       <select id="fBoxLv" style="margin-bottom:6px">
         <option value="1">🟢 Lv.1 小菜</option><option value="2">🟡 Lv.2 有點東西</option><option value="3">🔴 Lv.3 地獄</option>
       </select>
+      <select id="fBoxTg" style="margin-bottom:6px">
+        <option value="">🎲 不指定（交給命運）</option>
+        ${PUB.players.filter(x=>x.id!==me.id).map(x=>`<option value="${x.id}" ${x.mb>=5?'disabled':''}>🎯 指定問 ${esc(x.name)}（信箱 ${x.mb}/5${x.mb>=5?'・已滿':''}）</option>`).join('')}
+      </select>
       <textarea id="fBoxT" maxlength="160" placeholder="例：如果不用工作一年，你想做什麼？"></textarea>
+      <p class="hint">指定題會躺在對方信箱：等他當挑戰者、轉盤轉到該等級時優先引爆（畫面會標「有人指定要問你」，但不會知道是誰）。信箱滿 5 題就先鎖，等他答掉一題就能再投。</p>
       <div style="margin-top:8px"><button class="btn sm hell" onclick="subBox()">匿名丟進箱子</button></div>`;
   }
   return forms?`<div class="card"><h3>📮 我的投稿</h3>${forms}</div>`:'';
@@ -931,7 +975,8 @@ window.subLife=()=>{
   sendC2H({type:'life',q,correct:a,decoys:ds});
 };
 window.subBox=()=>{ const t=$('#fBoxT').value.trim(); if(!t){alert('先寫題目');return;}
-  sendC2H({type:'box',level:parseInt($('#fBoxLv').value),text:t}); $('#fBoxT').value=''; };
+  const tg=$('#fBoxTg')?$('#fBoxTg').value:'';
+  sendC2H({type:'box',level:parseInt($('#fBoxLv').value),text:t,target:tg||null}); $('#fBoxT').value=''; };
 window.castVote=(qid,choice)=>{ if(myVote[qid]!==undefined) return; myVote[qid]=choice; sendC2H({type:'vote',qid,choice}); renderPlayer(); };
 window.s3Send=(qid,action,designee)=>{ window.__picking=null; sendC2H({type:'s3act',qid,action,designee}); };
 window.s3SendSpin=(qid)=>{ sendC2H({type:'s3act',qid,action:'spin'}); };
