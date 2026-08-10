@@ -158,6 +158,11 @@ label.f{display:block;font-size:13px;color:var(--dim);margin:12px 0 6px;letter-s
 .final-hero .t{font-size:15px;letter-spacing:.35em;text-indent:.35em;color:var(--dim)}
 .final-hero .name{font-size:34px;font-weight:800;margin:6px 0}
 .final-hero .sc{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
+/* 命運之輪 */
+.wheelwrap{position:relative;width:232px;margin:12px auto 4px}
+.wpointer{position:absolute;top:-8px;left:50%;transform:translateX(-50%);font-size:24px;color:var(--moon);z-index:2;text-shadow:0 3px 8px rgba(0,0,0,.7)}
+#wheelG{transform-origin:116px 116px;will-change:transform}
+.spinhint{text-align:center;color:var(--dim);font-size:14px;letter-spacing:.1em}
 </style>
 </head>
 <body>
@@ -253,8 +258,10 @@ function buildPub(){
     if(H.sub==='reveal') pub.data=c.reveal;
   }
   if(H.phase==='s3' && c){
-    if(H.sub==='ask') pub.data={qid:c.qid, level:c.level, text:c.text, targetId:c.target, targetName:pName(c.target),
-      canDesignate:(H.players[c.target]?.score??0)>=0, stage:c.stage, designatorName:c.designator?pName(c.designator):null};
+    if(H.sub==='ask') pub.data={qid:c.qid, stage:c.stage, level:c.level, text:c.text, spin:c.spin,
+      targetId:c.target, targetName:pName(c.target),
+      canDesignate:(H.players[c.target]?.score??0)>=0,
+      designatorName:c.designator?pName(c.designator):null};
     if(H.sub==='reveal') pub.data=c.reveal;
   }
   if(H.phase==='final'){
@@ -383,11 +390,63 @@ function s2Reveal(){
   broadcast(); renderHost();
 }
 
-/* ---- 第三階段 ---- */
-function s3Ask(boxId, targetId){
-  const q=H.box.find(x=>x.id===boxId); if(!q) return;
+/* ---- 第三階段：命運之輪 ---- */
+const WHEEL_SEGS=[1,2,3,1,2,3];
+function wheelSvg(){
+  const col={1:'#8FD98A',2:'#F2B04E',3:'#EF6A62'};
+  let w='';
+  for(let i=0;i<6;i++){
+    const a0=(i*60-90)*Math.PI/180, a1=((i+1)*60-90)*Math.PI/180, am=(i*60-60)*Math.PI/180;
+    const x0=116+102*Math.cos(a0), y0=116+102*Math.sin(a0);
+    const x1=116+102*Math.cos(a1), y1=116+102*Math.sin(a1);
+    const tx=116+64*Math.cos(am), ty=116+64*Math.sin(am);
+    w+=`<path d="M116,116 L${x0.toFixed(1)},${y0.toFixed(1)} A102,102 0 0,1 ${x1.toFixed(1)},${y1.toFixed(1)} Z" fill="${col[WHEEL_SEGS[i]]}" stroke="#14132A" stroke-width="3"/>
+        <text x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" font-size="17" font-weight="800" fill="#14132A">Lv${WHEEL_SEGS[i]}</text>`;
+  }
+  return `<div class="wheelwrap"><div class="wpointer">▼</div>
+    <svg width="232" height="232" viewBox="0 0 232 232"><g id="wheelG">${w}<circle cx="116" cy="116" r="17" fill="#14132A" stroke="#39365F" stroke-width="2"/><text x="116" y="117" text-anchor="middle" dominant-baseline="middle" font-size="13" fill="#918DB9">命運</text></g></svg></div>`;
+}
+/* 判斷轉盤是否仍在動畫中（以本機收到的時間為準，避免裝置時鐘不同步） */
+function spinState(qid, spin){
+  if(!spin) return {active:false};
+  window.__spinStart = window.__spinStart||{};
+  if(!window.__spinStart[qid]) window.__spinStart[qid]=now();
+  const start=window.__spinStart[qid];
+  const active=(now()-start)<spin.dur;
+  if(active) window.__spin={rot:spin.rot, dur:spin.dur, start};
+  return {active};
+}
+function animateWheel(){
+  const g=document.getElementById('wheelG'); const s=window.__spin; window.__spin=null;
+  if(!g||!s) return;
+  const remain=Math.max(0, s.dur-(now()-s.start));
+  if(remain<=60) return;
+  g.style.transition='none'; g.style.transform='rotate(0deg)';
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    g.style.transition=`transform ${remain}ms cubic-bezier(.1,.68,.06,1)`;
+    g.style.transform=`rotate(${s.rot}deg)`;
+  }));
+  clearTimeout(window.__spinT);
+  window.__spinT=setTimeout(()=>{ role==='host'?renderHost():renderPlayer(); }, remain+250);
+}
+function s3Start(targetId){
+  if(!H.box.some(x=>!x.used)){ alert('問題箱沒有可用題目'); return; }
   H.phase='s3'; H.sub='ask';
-  H.cur={type:'s3', qid:uid(), srcId:q.id, level:q.level, text:q.text, target:targetId, stage:'choose', designator:null};
+  H.cur={type:'s3', qid:uid(), target:targetId, stage:'spin', level:null, text:null, srcId:null, spin:null, designator:null};
+  broadcast(); renderHost();
+}
+function s3Spin(){
+  const c=H.cur; if(!c||c.stage!=='spin') return;
+  const lvs=[1,2,3].filter(l=>H.box.some(x=>!x.used&&x.level===l));
+  if(!lvs.length){ alert('問題箱沒有可用題目'); return; }
+  const lv=lvs[Math.floor(Math.random()*lvs.length)];
+  const pool=H.box.filter(x=>!x.used&&x.level===lv);
+  const q=pool[Math.floor(Math.random()*pool.length)];
+  const idxs=WHEEL_SEGS.map((s,i)=>s===lv?i:-1).filter(i=>i>=0);
+  const seg=idxs[Math.floor(Math.random()*idxs.length)];
+  const rot=Math.round(1800 + (360-(seg*60+30)) + (Math.random()*40-20));  // 5圈+落點±20°
+  c.level=lv; c.text=q.text; c.srcId=q.id; c.stage='choose';
+  c.spin={rot, dur:4200, ts:now()};
   broadcast(); renderHost();
 }
 function s3Apply(action, pid, designee){
@@ -398,6 +457,10 @@ function s3Apply(action, pid, designee){
     c.reveal={level:c.level, text:c.text, label, deltas};
     H.sub='reveal'; broadcast(); renderHost();
   };
+  if(c.stage==='spin'){
+    if(action==='spin' && pid===c.target) s3Spin();
+    return;
+  }
   if(c.stage==='choose'){
     if(action==='answer'){ bump(pid,1); deltas.push({name:pName(pid),d:+1,note:'回答'}); finish(`${pName(pid)} 選擇回答`); }
     else if(action==='drink'){ bump(pid,-1); deltas.push({name:pName(pid),d:-1,note:'喝一口 / Pass'}); finish(`${pName(pid)} 喝一口跳過`); }
@@ -575,42 +638,52 @@ function renderHost(){
     const c=H.cur;
     let cur='';
     if(H.sub==='ask'&&c){
-      cur = c.stage==='choose'
-        ? `<div class="banner hell">等待 ${esc(pName(c.target))} 抉擇中…</div>`
-        : `<div class="banner hell">${esc(pName(c.designator))} 指定了 ${esc(pName(c.target))}，等待其抉擇…</div>`;
-      cur = `<p class="big-q"><span class="tag ${LV[c.level].tag}">${LV[c.level].name}</span><br>「${esc(c.text)}」</p>`+cur;
+      const sp=spinState(c.qid, c.spin);
+      if(c.stage==='spin'){
+        cur=`${wheelSvg()}<p class="spinhint">等待 <b style="color:var(--moon)">${esc(pName(c.target))}</b> 轉動命運之輪<span class="wait-dot"></span></p>`;
+      } else if(c.stage==='choose' && sp.active){
+        cur=`${wheelSvg()}<p class="spinhint">命運轉動中<span class="wait-dot"></span></p>`;
+      } else if(c.stage==='choose'){
+        cur=`<p class="big-q"><span class="tag ${LV[c.level].tag}">${LV[c.level].name}</span><br>「${esc(c.text)}」</p>
+          <div class="banner hell">等待 ${esc(pName(c.target))} 抉擇中…</div>`;
+      } else {
+        cur=`<p class="big-q"><span class="tag ${LV[c.level].tag}">${LV[c.level].name}</span><br>「${esc(c.text)}」</p>
+          <div class="banner hell">${esc(pName(c.designator))} 指定了 ${esc(pName(c.target))}，等待其抉擇…</div>`;
+      }
+      panel=`<div class="card"><h3>🌕 第三階段・命運之輪</h3>${cur}
+        <div style="margin-top:12px"><button class="btn sm ghost" onclick="s3Cancel()">✋ 作廢本題</button></div></div>`;
+    } else {
+      const unused=H.box.filter(x=>!x.used).length;
+      const revealHtml = (H.sub==='reveal'&&c) ? `<p class="center small-note">${esc(c.reveal.label)}</p>${deltasHtml(c.reveal.deltas)}<div class="divider"></div>` : '';
+      const pool=[1,2,3].map(lv=>{
+        const items=H.box.filter(x=>x.level===lv);
+        if(!items.length) return '';
+        return `<div style="margin-top:10px"><span class="tag ${LV[lv].tag}">${LV[lv].name}</span>`+
+          items.map(q=>`<div class="pool-item ${q.used?'used':''}">
+            <div class="txt">${esc(q.text)}</div>
+            ${q.used?'<span class="small-note">已使用</span>':`
+            <div class="ops">
+              <button class="btn sm ghost" onclick="editBox('${q.id}')">✏️</button>
+              <button class="btn sm ghost" onclick="lvBox('${q.id}')">Lv切換</button>
+              <button class="btn sm ghost" onclick="delBox('${q.id}')">🗑️</button>
+            </div>`}
+          </div>`).join('')+`</div>`;
+      }).join('');
+      panel=`<div class="card"><h3>🌕 第三階段・命運之輪</h3>
+        ${revealHtml}
+        <label class="f">下一位挑戰者</label>
+        <select id="s3target">
+          <option value="__rand__">🎲 隨機抽人</option>
+          ${ps.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+        </select>
+        <div style="margin-top:10px"><button class="btn hell" onclick="s3Begin()" ${unused&&ps.length?'':'disabled'}>🎡 交給命運之輪（剩 ${unused} 題）</button></div>
+        <div class="divider"></div>
+        <button class="btn sm ghost" onclick="addBox()">＋ 主持人加題</button>
+        ${pool||'<p class="small-note">目前沒有題目，可請玩家在手機投稿，或自行加題。</p>'}
+        <div class="divider"></div>
+        <button class="btn primary" onclick="toFinal()">🏁 結束遊戲，公布結果</button>
+      </div>`;
     }
-    if(H.sub==='reveal'&&c){
-      cur=`<p class="center small-note">${esc(c.reveal.label)}</p>${deltasHtml(c.reveal.deltas)}
-        <div class="divider"></div>`;
-    }
-    const pool=[1,2,3].map(lv=>{
-      const items=H.box.filter(x=>x.level===lv);
-      if(!items.length) return '';
-      return `<div style="margin-top:10px"><span class="tag ${LV[lv].tag}">${LV[lv].name}</span>`+
-        items.map(q=>`<div class="pool-item ${q.used?'used':''}">
-          <div class="txt">${esc(q.text)}</div>
-          ${q.used?'<span class="small-note">已使用</span>':`
-          <div class="ops">
-            <select id="tg_${q.id}" style="width:auto;padding:7px 10px;font-size:14px">
-              <option value="">指定對象…</option>
-              <option value="__rand__">🎲 隨機</option>
-              ${ps.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
-            </select>
-            <button class="btn sm hell" onclick="hostAsk('${q.id}')">出題</button>
-            <button class="btn sm ghost" onclick="editBox('${q.id}')">✏️</button>
-            <button class="btn sm ghost" onclick="lvBox('${q.id}')">Lv切換</button>
-            <button class="btn sm ghost" onclick="delBox('${q.id}')">🗑️</button>
-          </div>`}
-        </div>`).join('')+`</div>`;
-    }).join('');
-    panel=`<div class="card"><h3>🌕 第三階段・匿名問題箱</h3>
-      ${cur}
-      <button class="btn sm ghost" onclick="addBox()">＋ 主持人加題</button>
-      ${pool||'<p class="small-note">目前沒有題目，可請玩家在手機投稿，或自行加題。</p>'}
-      <div class="divider"></div>
-      <button class="btn primary" onclick="toFinal()">🏁 結束遊戲，公布結果</button>
-    </div>`;
   }
   if(H.phase==='final'){
     const rk=ps.slice().sort((a,b)=>b.score-a.score);
@@ -638,6 +711,7 @@ function renderHost(){
     ${H.phase!=='lobby'?`<div class="card"><h3>🔗 邀請</h3><div class="roomcode" style="font-size:22px">${H.room}</div><div id="qrbox"></div></div>`:''}`;
   const qb=$('#qrbox');
   if(qb){ qb.innerHTML=''; new QRCode(qb,{text:link,width:170,height:170,colorDark:'#14132A',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }
+  animateWheel();
 }
 window.gotoPhase=(k)=>{
   if(!H || H.phase===k) return;
@@ -646,12 +720,18 @@ window.gotoPhase=(k)=>{
   broadcast(); renderHost();
 };
 window.copyLink=t=>{ navigator.clipboard?.writeText(t); alert('已複製連結'); };
-window.hostAsk=(qid)=>{
-  let tg=$('#tg_'+qid).value;
-  if(!tg){ alert('請先選擇指定對象'); return; }
+window.s3Begin=()=>{
+  let tg=$('#s3target').value;
   const ps=players();
+  if(!ps.length){ alert('還沒有玩家'); return; }
   if(tg==='__rand__') tg=ps[Math.floor(Math.random()*ps.length)].id;
-  s3Ask(qid,tg);
+  if(!H.players[tg]){ alert('請選擇挑戰者'); return; }
+  s3Start(tg);
+};
+window.s3Cancel=()=>{
+  const c=H.cur;
+  if(c && c.srcId){ const src=H.box.find(x=>x.id===c.srcId); if(src) src.used=true; }  // 題目已曝光就作廢
+  H.sub=''; H.cur=null; broadcast(); renderHost();
 };
 window.addBox=()=>{
   const t=prompt('題目內容？'); if(!t) return;
@@ -705,6 +785,7 @@ function renderPlayer(){
   /* 還原輸入值與焦點 */
   Object.entries(vals).forEach(([id,v])=>{ const el=document.getElementById(id); if(el && ('value' in el) && v!=='') el.value=v; });
   if(focusId){ const el=document.getElementById(focusId); if(el){ el.focus(); try{el.setSelectionRange(selS,selE);}catch(e){} } }
+  animateWheel();
 }
 function playerPhaseHtml(){
   const d=PUB.data||{}; const ph=PUB.phase, sub=PUB.sub;
@@ -749,32 +830,54 @@ function playerPhaseHtml(){
   if(ph==='s3'){
     if(sub==='ask'){
       const isMe = d.targetId===me.id;
+      const sp=spinState(d.qid, d.spin);
+      /* 轉盤畫面（尚未轉 / 轉動中） */
+      if(d.stage==='spin' || (d.stage==='choose' && sp.active)){
+        return `<div class="card"><h3>🌕 命運之輪</h3>
+          ${wheelSvg()}
+          ${d.stage==='spin'
+            ? (isMe
+                ? `<div style="margin-top:12px"><button class="btn hell" onclick="s3SendSpin('${d.qid}')">🎡 轉動命運之輪</button></div>
+                   <p class="spinhint" style="margin-top:8px">停在哪個等級，就抽哪個等級的題目</p>`
+                : `<p class="spinhint">等待 <b style="color:var(--moon)">${esc(d.targetName)}</b> 轉動命運之輪<span class="wait-dot"></span></p>`)
+            : `<p class="spinhint">命運轉動中<span class="wait-dot"></span></p>`}
+        </div>`;
+      }
       const head=`<p class="big-q"><span class="tag ${LV[d.level].tag}">${LV[d.level].name}</span><br>「${esc(d.text)}」</p>`;
+      /* 被指定者的畫面：不經轉盤，直接抉擇 */
+      if(d.stage==='designated'){
+        if(d.targetId!==me.id) return `<div class="card"><h3>🌕 匿名問題箱</h3>${head}
+          <div class="banner hell">${esc(d.designatorName)} 指定了 ${esc(d.targetName)}！<span class="wait-dot"> 抉擇中</span></div></div>`;
+        return `<div class="card"><h3>🌕 你被指定了！</h3>${head}
+          <div class="banner hell">${esc(d.designatorName)} 把炸彈丟給你（不能再轉指，也不用轉盤）</div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn primary" onclick="s3Send('${d.qid}','answer')">🎤 回答 +1</button>
+            <button class="btn" onclick="s3Send('${d.qid}','drink')">🍺 喝一口 / Pass −1</button>
+          </div></div>`;
+      }
+      /* 挑戰者抉擇畫面 */
       if(!isMe) return `<div class="card"><h3>🌕 匿名問題箱</h3>${head}
-        <div class="banner hell">${d.stage==='designated'?`${esc(d.designatorName)} 指定了 ${esc(d.targetName)}！`:`輪到 ${esc(d.targetName)}`}<span class="wait-dot"> 抉擇中</span></div></div>`;
-      if(d.stage==='designated') return `<div class="card"><h3>🌕 你被指定了！</h3>${head}
-        <div class="banner hell">${esc(d.designatorName)} 把炸彈丟給你（不能再轉指）</div>
-        <div class="row" style="margin-top:12px">
-          <button class="btn primary" onclick="s3Send('${d.qid}','answer')">🎤 回答 +1</button>
-          <button class="btn" onclick="s3Send('${d.qid}','drink')">🍺 喝一口 / Pass −1</button>
-        </div></div>`;
+        <div class="banner hell">輪到 ${esc(d.targetName)}<span class="wait-dot"> 抉擇中</span></div></div>`;
+      if(window.__picking===d.qid){
+        /* 指定名單頁 */
+        return `<div class="card"><h3>💣 指定誰回答？</h3>${head}
+          <p class="center small-note">你將 −2，被指定者只能「回答 +1」或「喝一口/Pass −1」</p>
+          <div class="opts">${PUB.players.filter(x=>x.id!==me.id).map(x=>`<button class="opt" onclick="s3Send('${d.qid}','designate','${x.id}')">${esc(x.name)}</button>`).join('')}</div>
+          <div style="margin-top:12px"><button class="btn ghost" onclick="window.__picking=null;renderPlayer()">← 返回</button></div></div>`;
+      }
       return `<div class="card"><h3>🌕 輪到你了</h3>${head}
         <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
           <button class="btn primary" onclick="s3Send('${d.qid}','answer')">🎤 回答 +1</button>
           <button class="btn" onclick="s3Send('${d.qid}','drink')">🍺 喝一口 / Pass −1</button>
-          <button class="btn hell" onclick="togglePick()" ${d.canDesignate?'':'disabled'}>💣 指定別人回答 −2${d.canDesignate?'':'（負分不可用）'}</button>
-          <div id="pickBox" class="hidden">
-            <p class="small-note center">丟給誰？</p>
-            <div class="opts">${PUB.players.filter(x=>x.id!==me.id).map(x=>`<button class="opt" onclick="s3Send('${d.qid}','designate','${x.id}')">${esc(x.name)}</button>`).join('')}</div>
-          </div>
+          <button class="btn hell" onclick="window.__picking='${d.qid}';renderPlayer()" ${d.canDesignate?'':'disabled'}>💣 指定別人回答 −2${d.canDesignate?'':'（負分不可用）'}</button>
         </div></div>`;
     }
     if(sub==='reveal') return `<div class="card"><h3>🌕 結果</h3>
       <p class="big-q"><span class="tag ${LV[d.level].tag}">${LV[d.level].name}</span><br>「${esc(d.text)}」</p>
       <p class="center small-note">${esc(d.label)}</p>
       ${deltasHtml(d.deltas)}
-      <p class="center small-note wait-dot" style="margin-top:10px">等待主持人下一題</p></div>`;
-    return `<div class="card center"><h3>🌕 匿名問題箱</h3><p class="wait-dot">主持人正在抽題</p></div>`;
+      <p class="center small-note wait-dot" style="margin-top:10px">等待主持人指定下一位</p></div>`;
+    return `<div class="card center"><h3>🌕 命運之輪</h3><p class="wait-dot">主持人正在指定下一位挑戰者</p></div>`;
   }
   if(ph==='final'){
     const rk=d.ranking||[];
@@ -830,8 +933,8 @@ window.subLife=()=>{
 window.subBox=()=>{ const t=$('#fBoxT').value.trim(); if(!t){alert('先寫題目');return;}
   sendC2H({type:'box',level:parseInt($('#fBoxLv').value),text:t}); $('#fBoxT').value=''; };
 window.castVote=(qid,choice)=>{ if(myVote[qid]!==undefined) return; myVote[qid]=choice; sendC2H({type:'vote',qid,choice}); renderPlayer(); };
-window.s3Send=(qid,action,designee)=>{ sendC2H({type:'s3act',qid,action,designee}); };
-window.togglePick=()=>{ $('#pickBox').classList.toggle('hidden'); };
+window.s3Send=(qid,action,designee)=>{ window.__picking=null; sendC2H({type:'s3act',qid,action,designee}); };
+window.s3SendSpin=(qid)=>{ sendC2H({type:'s3act',qid,action:'spin'}); };
 
 /* ---------------- 收訊分派 ---------------- */
 function onMsg(topic, payload){
