@@ -270,23 +270,42 @@ function broadcast(){
 }
 function bump(id,d){ if(H.players[id]){ H.players[id].score+=d; } }
 
+function migratePlayer(oldId,newId){
+  H.players[newId]=H.players[oldId]; delete H.players[oldId];
+  H.stupid.forEach(x=>{ if(x.author===oldId) x.author=newId; });
+  H.life.forEach(x=>{ if(x.owner===oldId) x.owner=newId; });
+  H.box.forEach(x=>{ if(x.author===oldId) x.author=newId; });
+  const c=H.cur;
+  if(c){
+    ['author','owner','target','designator'].forEach(k=>{ if(c[k]===oldId) c[k]=newId; });
+    if(c.votes){
+      if(c.votes[oldId]!==undefined){ c.votes[newId]=c.votes[oldId]; delete c.votes[oldId]; }
+      Object.keys(c.votes).forEach(k=>{ if(c.votes[k]===oldId) c.votes[k]=newId; });  // 第一階段選項是玩家 id
+    }
+  }
+}
+
 /* 主持人收玩家訊息 */
 function hostOnMsg(m){
   if(H.seen.includes(m.mid)) return;
   H.seen.push(m.mid); if(H.seen.length>80) H.seen.shift();
   const pid = m.pid;
   switch(m.type){
-    case 'join':
-      if(!H.players[pid]) H.players[pid]={name:(m.name||'玩家').slice(0,12), score:0};
-      else H.players[pid].name=(m.name||H.players[pid].name).slice(0,12);
+    case 'join':{
+      const nm=(m.name||'玩家').slice(0,12);
+      if(H.players[pid]){ H.players[pid].name=nm; break; }
+      const oldId=Object.keys(H.players).find(id=>H.players[id].name===nm);
+      if(oldId) migratePlayer(oldId,pid);      // 同名視為同一人回歸：搬移分數與投稿
+      else H.players[pid]={name:nm, score:0};
       break;
+    }
     case 'stupid':
-      if(H.phase!=='lobby') return;
+      if(!['lobby','s1'].includes(H.phase)) return;
       if(H.stupid.some(x=>x.author===pid)) return;
-      H.stupid.push({id:uid(), author:pid, text:String(m.text||'').slice(0,160), used:false});
+      H.stupid.push({id:uid(), author:pid, text:String(m.text||'').slice(0,80), used:false});
       break;
     case 'life':
-      if(!['lobby','s1'].includes(H.phase)) return;
+      if(!['lobby','s1','s2'].includes(H.phase)) return;
       if(H.life.some(x=>x.owner===pid)) return;
       H.life.push({id:uid(), owner:pid, q:String(m.q||'').slice(0,120), correct:String(m.correct||'').slice(0,40),
         decoys:(m.decoys||[]).slice(0,3).map(x=>String(x).slice(0,40)), used:false});
@@ -403,7 +422,7 @@ function toFinal(){ H.phase='final'; H.sub=''; H.cur=null; broadcast(); renderHo
 function stagebar(phase){
   const on=k=>phase===k?'on':'';
   return `<div class="stagebar">
-    <span class="${on('s1')}">🌒 蠢事</span><span class="${on('s2')}">🌓 交換人生</span>
+    <span class="${on('s1')}">🌒 離譜事</span><span class="${on('s2')}">🌓 交換人生</span>
     <span class="${on('s3')}">🌕 問題箱</span><span class="${on('final')}">🏆 結算</span></div>`;
 }
 function deltasHtml(deltas){
@@ -416,10 +435,23 @@ function rankTable(list, adjustable){
     <tr><td>${i===0?'🏆':(i===list.length-1&&list.length>1?'💀':(i+1))}</td>
       <td>${esc(p.name)}</td>
       <td class="sc ${p.score>=0?'pos':'neg'}">${p.score>=0?'+':''}${p.score}</td>
-      ${adjustable?`<td class="adj"><button onclick="adj('${p.id}',-1)">−</button><button onclick="adj('${p.id}',1)">＋</button></td>`:''}</tr>`).join('');
+      ${adjustable?`<td class="adj"><button onclick="adj('${p.id}',-1)">−</button><button onclick="adj('${p.id}',1)">＋</button><button onclick="kick('${p.id}')" style="color:var(--hell)">✕</button></td>`:''}</tr>`).join('');
   return `<table class="rank">${rows||'<tr><td class="small-note">尚無玩家</td></tr>'}</table>`;
 }
 window.adj=(id,d)=>{ bump(id,d); broadcast(); renderHost(); };
+window.kick=(id)=>{
+  if(!H.players[id]) return;
+  if(!confirm(`把 ${pName(id)} 移出房間？（分數與投稿紀錄會一併移除）`)) return;
+  delete H.players[id];
+  H.stupid=H.stupid.filter(x=>x.author!==id);
+  H.life=H.life.filter(x=>x.owner!==id);
+  const c=H.cur;
+  if(c){
+    if(c.votes) delete c.votes[id];
+    if([c.author,c.owner,c.target].includes(id)){ H.sub=''; H.cur=null; }   // 當事人被移除，捨棄本題
+  }
+  broadcast(); renderHost();
+};
 
 /* =========================================================
    畫面：首頁
@@ -441,6 +473,7 @@ function renderHome(){
       <label class="f">你的名字</label>
       <input type="text" id="jName" maxlength="12" value="${esc(saved&&saved.name||'')}" placeholder="現場大家叫你什麼">
       <div style="margin-top:14px"><button class="btn primary" onclick="joinRoom()">🚪 進入房間</button></div>
+      ${saved?`<div style="margin-top:10px"><button class="btn ghost" onclick="quickRejoin()">↩︎ 回到房間 ${esc(saved.room)}（${esc(saved.name)}）</button></div>`:''}
     </div>
     <div class="card">
       <h3>我是主持人</h3>
@@ -449,7 +482,7 @@ function renderHome(){
       <div style="margin-top:14px"><button class="btn" onclick="createRoom()">🎤 建立新房間</button></div>
       ${hostRooms.map(r=>`<div style="margin-top:10px"><button class="btn ghost" onclick="resumeRoom('${r}')">↩︎ 繼續主持房間 ${r}</button></div>`).join('')}
     </div>
-    <p class="hint center">三階段：最近的蠢事 → 交換人生 → 匿名問題箱<br>最高分「人生贏家」，最低分「人生最離譜」🌙</p>`;
+    <p class="hint center">三階段：曾經的離譜事／蠢事 → 交換人生 → 匿名問題箱<br>最高分「人生贏家」，最低分「人生最離譜」🌙</p>`;
 }
 window.createRoom=()=>{
   connBroker=$('#hBroker').value;
@@ -459,6 +492,14 @@ window.createRoom=()=>{
 window.resumeRoom=(r)=>{
   const st=JSON.parse(localStorage.getItem('cs_host_'+r)||'null');
   if(st) hostStart(r,st); 
+};
+window.quickRejoin=()=>{
+  const saved=JSON.parse(localStorage.getItem('cs_me')||'null'); if(!saved) return;
+  me={id:saved.id, name:saved.name}; role='player'; room=saved.room; PUB=null;
+  const b=new URL(location.href).searchParams.get('b');
+  connect(BROKERS[b]?b:connBroker, ()=>{});
+  renderPlayer();
+  setTimeout(()=>{ if(!PUB && role==='player') $('#pWarn')?.classList.remove('hidden'); }, 6000);
 };
 window.joinRoom=()=>{
   const r=($('#jRoom').value||'').trim().toUpperCase();
@@ -491,41 +532,44 @@ function renderHost(){
       <button class="btn sm ghost" onclick="copyLink('${esc(link)}')">📋 複製玩家連結</button>
       <div class="divider"></div>
       <p class="small-note">投稿進度：蠢事 ${H.stupid.length}／交換人生 ${H.life.length}／問題箱 ${H.box.length}</p>
-      <div style="margin-top:12px"><button class="btn primary" onclick="s1Next()" ${H.stupid.length?'':'disabled'}>🌒 開始第一階段：最近的蠢事</button></div>
-      <div class="row" style="margin-top:8px">
-        <button class="btn sm ghost" onclick="s2Next()" ${H.life.length?'':'disabled'}>跳到第二階段</button>
-        <button class="btn sm ghost" onclick="H.phase='s3';H.sub='';H.cur=null;broadcast();renderHost()">跳到第三階段</button>
-      </div>
+      <div style="margin-top:12px"><button class="btn primary" onclick="s1Next()" ${H.stupid.length?'':'disabled'}>🌒 開始第一階段：曾經的離譜事／蠢事</button></div>
+
     </div>`;
   }
   if(H.phase==='s1'){
     const c=H.cur;
-    if(H.sub==='vote') panel=`<div class="card"><h3>🌒 第一階段・投票中</h3>
+    if(H.sub==='vote'&&c) panel=`<div class="card"><h3>🌒 第一階段・投票中</h3>
       <p class="big-q">「${esc(c.text)}」</p>
       <p class="small-note center">正解：<b style="color:var(--ember)">${esc(pName(c.author))}</b>（只有你看得到）</p>
       <p class="center small-note">已投票 ${Object.keys(c.votes).length} / ${ps.length} 人</p>
       <div style="margin-top:12px"><button class="btn primary" onclick="s1Reveal()">🎉 公布答案</button></div></div>`;
-    else panel=`<div class="card"><h3>🌒 第一階段・已公布</h3>
+    else if(H.sub==='reveal'&&c) panel=`<div class="card"><h3>🌒 第一階段・已公布</h3>
       ${deltasHtml(c.reveal.deltas)}
       <div class="row" style="margin-top:14px">
         <button class="btn" onclick="s1Next()" ${H.stupid.some(x=>!x.used)?'':'disabled'}>下一題（剩 ${H.stupid.filter(x=>!x.used).length}）</button>
-        <button class="btn mist" onclick="s2Next()" ${H.life.length?'':'disabled'}>🌓 進入第二階段</button>
+        <button class="btn mist" onclick="gotoPhase('s2')">🌓 進入第二階段</button>
       </div></div>`;
+    else panel=`<div class="card"><h3>🌒 第一階段・曾經的離譜事／蠢事</h3>
+      <p class="small-note">題庫剩 ${H.stupid.filter(x=>!x.used).length} 題（共 ${H.stupid.length}）</p>
+      <div style="margin-top:12px"><button class="btn primary" onclick="s1Next()" ${H.stupid.some(x=>!x.used)?'':'disabled'}>🎲 抽下一題</button></div></div>`;
   }
   if(H.phase==='s2'){
     const c=H.cur;
-    if(H.sub==='vote') panel=`<div class="card"><h3>🌓 第二階段・投票中</h3>
+    if(H.sub==='vote'&&c) panel=`<div class="card"><h3>🌓 第二階段・投票中</h3>
       <p class="big-q">${esc(pName(c.owner))}：「${esc(c.text)}」</p>
       <p class="small-note center">正解：<b style="color:var(--mist)">${esc(c.options[c.correctIdx])}</b>（只有你看得到）</p>
       <p class="center small-note">已投票 ${Object.keys(c.votes).length} / ${Math.max(ps.length-1,0)} 人（本人不投）</p>
       <div style="margin-top:12px"><button class="btn mist" onclick="s2Reveal()">🎉 公布答案</button></div></div>`;
-    else panel=`<div class="card"><h3>🌓 第二階段・已公布</h3>
+    else if(H.sub==='reveal'&&c) panel=`<div class="card"><h3>🌓 第二階段・已公布</h3>
       ${c.reveal.note?`<p class="center small-note">${esc(c.reveal.note)}</p>`:''}
       ${deltasHtml(c.reveal.deltas)}
       <div class="row" style="margin-top:14px">
         <button class="btn" onclick="s2Next()" ${H.life.some(x=>!x.used)?'':'disabled'}>下一題（剩 ${H.life.filter(x=>!x.used).length}）</button>
-        <button class="btn hell" onclick="H.phase='s3';H.sub='';H.cur=null;broadcast();renderHost()">🌕 進入第三階段</button>
+        <button class="btn hell" onclick="gotoPhase('s3')">🌕 進入第三階段</button>
       </div></div>`;
+    else panel=`<div class="card"><h3>🌓 第二階段・交換人生</h3>
+      <p class="small-note">題庫剩 ${H.life.filter(x=>!x.used).length} 題（共 ${H.life.length}）</p>
+      <div style="margin-top:12px"><button class="btn mist" onclick="s2Next()" ${H.life.some(x=>!x.used)?'':'disabled'}>🎲 抽下一題</button></div></div>`;
   }
   if(H.phase==='s3'){
     const c=H.cur;
@@ -574,6 +618,7 @@ function renderHost(){
       ${rk.length?`<div class="final-hero"><div class="t">人 生 贏 家</div><div class="name">🏆 ${esc(rk[0].name)}</div><div class="sc" style="color:var(--ember)">${rk[0].score>=0?'+':''}${rk[0].score}</div></div>`:''}
       ${rk.length>1?`<div class="final-hero"><div class="t">人 生 最 離 譜</div><div class="name">💀 ${esc(rk[rk.length-1].name)}</div><div class="sc" style="color:var(--hell)">${rk[rk.length-1].score>=0?'+':''}${rk[rk.length-1].score}</div></div>`:''}
       <div class="divider"></div>
+      <p class="small-note center">想繼續玩可用上方階段列跳回任一階段。</p>
       <button class="btn ghost" onclick="closeRoom()">🗑️ 關閉並清除房間</button>
     </div>`;
   }
@@ -581,6 +626,10 @@ function renderHost(){
   $('#app').innerHTML=`
     <div class="topbar"><div class="who">主持人台 <b>房間 ${H.room}</b></div>
       <span class="tag">${PHASES[H.phase]}${H.sub?'・'+({vote:'投票',reveal:'公布',ask:'抉擇'}[H.sub]||''):''}</span></div>
+    <div class="row" style="margin:10px 0;flex-wrap:wrap">
+      ${[['lobby','🌌 等待室'],['s1','🌒 第一'],['s2','🌓 第二'],['s3','🌕 第三'],['final','🏁 結算']].map(([k,l])=>
+        `<button class="btn sm ${H.phase===k?'primary':'ghost'}" onclick="gotoPhase('${k}')">${l}</button>`).join('')}
+    </div>
     ${stagebar(H.phase)}
     ${panel}
     <div class="card"><h3>📊 即時排名（可手動調整）</h3>${rankTable(ps,true)}
@@ -590,6 +639,12 @@ function renderHost(){
   const qb=$('#qrbox');
   if(qb){ qb.innerHTML=''; new QRCode(qb,{text:link,width:170,height:170,colorDark:'#14132A',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }
 }
+window.gotoPhase=(k)=>{
+  if(!H || H.phase===k) return;
+  if(H.cur && ['vote','ask'].includes(H.sub) && !confirm('目前這一題還沒公布，切換階段會捨棄它。確定？')) return;
+  H.phase=k; H.sub=''; H.cur=null;
+  broadcast(); renderHost();
+};
 window.copyLink=t=>{ navigator.clipboard?.writeText(t); alert('已複製連結'); };
 window.hostAsk=(qid)=>{
   let tg=$('#tg_'+qid).value;
@@ -621,12 +676,22 @@ window.closeRoom=()=>{
 function myPub(){ return PUB?.players.find(p=>p.id===me.id); }
 function renderPlayer(){
   if(role!=='player') return;
+  /* 保留輸入中的表單值與焦點，避免任何狀態廣播把打到一半的內容清掉 */
+  const vals={}; let focusId=null, selS=0, selE=0;
+  document.querySelectorAll('input,textarea,select').forEach(el=>{ if(el.id) vals[el.id]=el.value; });
+  const ae=document.activeElement;
+  if(ae && ae.id && ('value' in ae)){ focusId=ae.id; try{selS=ae.selectionStart;selE=ae.selectionEnd;}catch(e){} }
+
   const p=myPub();
   const score=p?p.score:0;
   let body='';
   if(!PUB){
     body=`<div class="card center"><p class="wait-dot">正在尋找房間 ${esc(room)}</p>
       <p id="pWarn" class="hint hidden" style="color:var(--hell)">找不到房間。請確認代碼正確、主持人已開房，且雙方使用同一個伺服器。</p></div>`;
+  } else if(!p){
+    body=`<div class="card center"><h3>🚪 已離開房間</h3>
+      <p class="hint">你目前不在玩家名單中（可能被主持人移出）。</p>
+      <div style="margin-top:12px"><button class="btn primary" onclick="sendC2H({type:'join',name:me.name})">重新加入</button></div></div>`;
   } else {
     body = playerPhaseHtml() + submitFormsHtml() + `<div class="card"><h3>🌙 現場排名</h3>${rankTable(PUB.players,false)}</div>`;
   }
@@ -637,6 +702,9 @@ function renderPlayer(){
     </div>
     ${PUB?stagebar(PUB.phase):''}
     ${body}`;
+  /* 還原輸入值與焦點 */
+  Object.entries(vals).forEach(([id,v])=>{ const el=document.getElementById(id); if(el && ('value' in el) && v!=='') el.value=v; });
+  if(focusId){ const el=document.getElementById(focusId); if(el){ el.focus(); try{el.setSelectionRange(selS,selE);}catch(e){} } }
 }
 function playerPhaseHtml(){
   const d=PUB.data||{}; const ph=PUB.phase, sub=PUB.sub;
@@ -648,7 +716,7 @@ function playerPhaseHtml(){
   if(ph==='s1'){
     if(sub==='vote'){
       const voted = myVote[d.qid]!==undefined;
-      return `<div class="card"><h3>🌒 最近的蠢事</h3>
+      return `<div class="card"><h3>🌒 曾經的離譜事／蠢事</h3>
         <p class="big-q">「${esc(d.text)}」</p>
         <p class="center small-note">你覺得是誰？</p>
         <div class="opts">${PUB.players.map(x=>`<button class="opt ${myVote[d.qid]===x.id?'sel':''} ${voted&&myVote[d.qid]!==x.id?'dis':''}" onclick="castVote('${d.qid}','${x.id}')">${esc(x.name)}</button>`).join('')}</div>
@@ -723,14 +791,14 @@ function submitFormsHtml(){
   const p=myPub(); if(!p) return '';
   const ph=PUB.phase;
   let forms='';
-  if(ph==='lobby'){
+  if(['lobby','s1'].includes(ph)){
     forms += p.st
       ? `<div class="donebox">✓ 蠢事已投稿（匿名）</div>`
-      : `<label class="f">😂 最近發生的一件蠢事（30～80字，真事、別寫名字）</label>
-         <textarea id="fStupid" maxlength="160" placeholder="例：上班前買咖啡，到公司才發現自己穿拖鞋。"></textarea>
+      : `<label class="f">😂 曾經發生過的離譜事／蠢事（5～80字，真事、別寫名字）</label>
+         <textarea id="fStupid" maxlength="80" placeholder="例：上班前買咖啡，到公司才發現自己穿拖鞋。"></textarea>
          <div style="margin-top:8px"><button class="btn sm primary" onclick="subStupid()">匿名投稿</button></div><div class="divider"></div>`;
   }
-  if(['lobby','s1'].includes(ph)){
+  if(['lobby','s1','s2'].includes(ph)){
     forms += p.lf
       ? `<div class="donebox" style="margin-top:10px">✓ 交換人生題目已投稿</div>`
       : `<label class="f">🃏 出一道關於你自己的問題（答案要是至少一位朋友可能不知道的事）</label>
@@ -752,7 +820,7 @@ function submitFormsHtml(){
   }
   return forms?`<div class="card"><h3>📮 我的投稿</h3>${forms}</div>`:'';
 }
-window.subStupid=()=>{ const t=$('#fStupid').value.trim(); if(t.length<10){alert('再多寫一點吧（至少10字）');return;} sendC2H({type:'stupid',text:t}); };
+window.subStupid=()=>{ const t=$('#fStupid').value.trim(); if(t.length<5){alert('至少寫 5 個字');return;} sendC2H({type:'stupid',text:t}); };
 window.subLife=()=>{
   const q=$('#fLifeQ').value.trim(), a=$('#fLifeA').value.trim();
   const ds=[$('#fLifeD1').value.trim(),$('#fLifeD2').value.trim(),$('#fLifeD3').value.trim()].filter(Boolean);
