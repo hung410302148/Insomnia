@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>草山夜未眠・交換人生</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+:root{
+  --ink:#14132A;        /* 夜空底 */
+  --panel:#1E1C3A;      /* 卡面 */
+  --panel2:#26234A;     /* 卡面亮 */
+  --moon:#F2EDE0;       /* 月霧白（主文字） */
+  --dim:#918DB9;        /* 薄暮紫灰（次文字） */
+  --line:#39365F;       /* 邊線 */
+  --ember:#F2B04E;      /* 燈火琥珀（主行動 / 第一階段） */
+  --mist:#7BD8C2;       /* 硫磺泉青（第二階段） */
+  --hell:#EF6A62;       /* 地獄緋（Lv.3 / 負分） */
+  --good:#8FD98A;
+  --r:20px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  font-family:"PingFang TC","Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif;
+  background:
+    radial-gradient(1px 1px at 12% 18%, rgba(242,237,224,.55) 50%, transparent 51%),
+    radial-gradient(1px 1px at 78% 9%,  rgba(242,237,224,.45) 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 55% 24%, rgba(242,237,224,.35) 50%, transparent 51%),
+    radial-gradient(1px 1px at 30% 6%,  rgba(242,237,224,.4) 50%, transparent 51%),
+    radial-gradient(1px 1px at 90% 30%, rgba(242,237,224,.3) 50%, transparent 51%),
+    linear-gradient(180deg,#0E0D20 0%, var(--ink) 34%, #191735 100%);
+  background-attachment:fixed;
+  color:var(--moon);
+  min-height:100%;
+  line-height:1.6;
+}
+#app{max-width:560px;margin:0 auto;padding:16px 16px 60px}
+.host #app{max-width:760px}
+
+/* ---------- 通用元件 ---------- */
+.eyebrow{letter-spacing:.55em;text-indent:.55em;font-size:12px;color:var(--dim);text-align:center;margin-bottom:4px}
+h1.logo{text-align:center;font-size:30px;font-weight:800;letter-spacing:.12em;margin:6px 0 2px}
+h1.logo small{display:block;font-size:14px;font-weight:500;color:var(--ember);letter-spacing:.4em;text-indent:.4em;margin-top:4px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px;margin:14px 0;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.card h3{font-size:15px;letter-spacing:.15em;color:var(--dim);font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.card h3::after{content:"";flex:1;height:1px;background:var(--line)}
+.btn{
+  display:block;width:100%;border:none;border-radius:16px;cursor:pointer;
+  padding:15px 18px;font-size:17px;font-weight:700;letter-spacing:.08em;
+  background:var(--panel2);color:var(--moon);border:1px solid var(--line);
+  transition:transform .08s ease, filter .15s ease;
+  font-family:inherit;
+}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.primary{background:linear-gradient(160deg,#F6C46E,var(--ember));color:#3A2A08;border:none;box-shadow:0 6px 18px rgba(242,176,78,.28)}
+.btn.mist{background:linear-gradient(160deg,#9AE6D2,var(--mist));color:#0B3A31;border:none}
+.btn.hell{background:linear-gradient(160deg,#F58B84,var(--hell));color:#4A0F0C;border:none}
+.btn.ghost{background:transparent}
+.btn.sm{padding:9px 12px;font-size:14px;border-radius:12px;width:auto;display:inline-block}
+.row{display:flex;gap:10px}
+.row .btn{flex:1}
+input[type=text],textarea,select{
+  width:100%;background:#161430;border:1px solid var(--line);border-radius:14px;
+  color:var(--moon);padding:13px 14px;font-size:16px;font-family:inherit;outline:none;
+}
+input:focus,textarea:focus,select:focus{border-color:var(--ember)}
+textarea{resize:vertical;min-height:76px}
+label.f{display:block;font-size:13px;color:var(--dim);margin:12px 0 6px;letter-spacing:.08em}
+.hint{font-size:13px;color:var(--dim);margin-top:8px}
+.tag{display:inline-block;font-size:12px;border-radius:99px;padding:2px 10px;border:1px solid var(--line);color:var(--dim);letter-spacing:.1em}
+.tag.lv1{color:#0B3A31;background:var(--good);border:none;font-weight:700}
+.tag.lv2{color:#3A2A08;background:var(--ember);border:none;font-weight:700}
+.tag.lv3{color:#fff;background:var(--hell);border:none;font-weight:700}
+.center{text-align:center}
+.big-q{font-size:22px;font-weight:800;line-height:1.7;margin:10px 0;text-align:center}
+.wait-dot::after{content:"…";animation:dots 1.4s steps(4,end) infinite}
+@keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+
+/* 月亮分數徽章（玩家端 signature） */
+.topbar{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
+  padding:10px 4px;backdrop-filter:blur(8px);background:rgba(20,19,42,.72);border-bottom:1px solid var(--line);margin:-16px -16px 10px;padding-left:16px;padding-right:16px}
+.topbar .who{font-size:14px;color:var(--dim)}
+.topbar .who b{color:var(--moon);font-size:16px;letter-spacing:.05em}
+.moonchip{
+  min-width:64px;height:64px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-weight:800;font-variant-numeric:tabular-nums;
+  background:radial-gradient(circle at 32% 28%, #FFE9BD, var(--ember) 70%);
+  color:#3A2A08;box-shadow:0 0 22px rgba(242,176,78,.5), inset -6px -8px 14px rgba(0,0,0,.12);
+  transition:background .4s ease, box-shadow .4s ease;
+}
+.moonchip.neg{background:radial-gradient(circle at 32% 28%, #FFB3AC, var(--hell) 72%);color:#4A0F0C;box-shadow:0 0 22px rgba(239,106,98,.5), inset -6px -8px 14px rgba(0,0,0,.15)}
+.moonchip .n{font-size:24px;line-height:1}
+.moonchip .t{font-size:10px;letter-spacing:.2em;opacity:.75}
+.stagebar{display:flex;justify-content:center;gap:18px;font-size:13px;color:var(--dim);margin:4px 0 10px;letter-spacing:.1em}
+.stagebar span{opacity:.45}
+.stagebar span.on{opacity:1;color:var(--moon);font-weight:700}
+
+/* 名單 / 排名 */
+.plist{display:flex;flex-wrap:wrap;gap:8px}
+.pchip{background:var(--panel2);border:1px solid var(--line);border-radius:99px;padding:6px 14px;font-size:14px;display:flex;align-items:center;gap:6px}
+.pchip .ok{color:var(--good)}
+.rank{width:100%;border-collapse:collapse}
+.rank td{padding:9px 6px;border-bottom:1px solid var(--line);font-size:15px}
+.rank td.sc{text-align:right;font-weight:800;font-variant-numeric:tabular-nums;font-size:17px}
+.rank td.sc.pos{color:var(--ember)}
+.rank td.sc.neg{color:var(--hell)}
+.rank .adj{white-space:nowrap;text-align:right}
+.rank .adj button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--moon);font-size:16px;cursor:pointer;margin-left:6px}
+
+/* 投票選項 */
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.opts.one{grid-template-columns:1fr}
+.opt{padding:16px 10px;border-radius:16px;border:1px solid var(--line);background:var(--panel2);
+  color:var(--moon);font-size:17px;font-weight:700;cursor:pointer;text-align:center;font-family:inherit;letter-spacing:.05em;
+  transition:transform .08s ease}
+.opt:active{transform:scale(.96)}
+.opt.sel{background:linear-gradient(160deg,#F6C46E,var(--ember));color:#3A2A08;border:none}
+.opt.correct{background:linear-gradient(160deg,#A8E6A0,var(--good));color:#0B3A31;border:none}
+.opt.dis{opacity:.45;pointer-events:none}
+.opt small{display:block;font-weight:500;font-size:12px;opacity:.7}
+
+/* 加減分動畫 */
+.deltas{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.delta{display:flex;justify-content:space-between;align-items:center;background:var(--panel2);border:1px solid var(--line);
+  border-radius:12px;padding:9px 14px;font-size:15px;opacity:0;transform:translateY(10px);animation:up .45s ease forwards}
+.delta b{font-variant-numeric:tabular-nums;font-size:17px}
+.delta b.pos{color:var(--ember)} .delta b.neg{color:var(--hell)}
+@keyframes up{to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){
+  .delta{animation:none;opacity:1;transform:none}
+  .wait-dot::after{animation:none;content:"…"}
+}
+
+/* 主持人題庫 */
+.pool-item{border:1px solid var(--line);border-radius:14px;padding:12px;margin:8px 0;background:var(--panel2)}
+.pool-item .txt{font-size:15px;margin:6px 0}
+.pool-item .ops{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.pool-item.used{opacity:.35}
+.small-note{font-size:12px;color:var(--dim)}
+#qrbox{display:flex;justify-content:center;margin:12px 0}
+#qrbox img,#qrbox canvas{border-radius:12px;border:6px solid #fff}
+.roomcode{font-size:34px;font-weight:800;letter-spacing:.35em;text-indent:.35em;text-align:center;color:var(--ember)}
+.conn{position:fixed;right:12px;bottom:12px;font-size:11px;color:var(--dim);display:flex;align-items:center;gap:5px;background:rgba(20,19,42,.8);padding:4px 10px;border-radius:99px;border:1px solid var(--line)}
+.conn i{width:8px;height:8px;border-radius:50%;background:var(--hell);display:inline-block}
+.conn.on i{background:var(--good)}
+.divider{height:1px;background:var(--line);margin:14px 0}
+.banner{border-radius:16px;padding:14px;text-align:center;font-weight:700;letter-spacing:.06em;margin:10px 0}
+.banner.hell{background:rgba(239,106,98,.14);border:1px solid var(--hell);color:#FFB3AC}
+.banner.ember{background:rgba(242,176,78,.12);border:1px solid var(--ember);color:#F6C46E}
+.banner.mist{background:rgba(123,216,194,.12);border:1px solid var(--mist);color:#9AE6D2}
+.hidden{display:none!important}
+.mytag{font-size:12px;color:var(--dim)}
+.donebox{display:flex;align-items:center;gap:10px;background:rgba(143,217,138,.1);border:1px solid var(--good);border-radius:14px;padding:12px;color:var(--good);font-weight:700}
+.final-hero{text-align:center;padding:24px 0 8px}
+.final-hero .t{font-size:15px;letter-spacing:.35em;text-indent:.35em;color:var(--dim)}
+.final-hero .name{font-size:34px;font-weight:800;margin:6px 0}
+.final-hero .sc{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="conn" id="conn"><i></i><span id="connTxt">未連線</span></div>
+
+<script>
+/* =========================================================
+   草山夜未眠・交換人生  —  單檔派對遊戲
+   架構：主持人端為權威狀態機，透過 MQTT (WebSocket) 廣播
+   Topic:
+     caoshan2/<room>/state  (retained, host -> all)
+     caoshan2/<room>/c2h    (players -> host)
+   ========================================================= */
+const $ = s => document.querySelector(s);
+const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => Math.random().toString(36).slice(2,10);
+const now = () => Date.now();
+const BROKERS = {
+  emqx:  {name:'EMQX 公用', url:'wss://broker.emqx.io:8084/mqtt'},
+  hivemq:{name:'HiveMQ 公用', url:'wss://broker.hivemq.com:8884/mqtt'},
+};
+const LV = {1:{tag:'lv1',name:'Lv.1 小菜'},2:{tag:'lv2',name:'Lv.2 有點東西'},3:{tag:'lv3',name:'Lv.3 地獄'}};
+const PHASES = {lobby:'等待室', s1:'第一階段', s2:'第二階段', s3:'第三階段', final:'結算'};
+
+let client=null, role=null, room=null;
+let me = null;                // 玩家：{id,name}
+let H = null;                 // 主持人完整狀態
+let PUB = null;               // 玩家收到的公開狀態
+let myVote = {};              // {qid:choice}
+let connBroker = 'emqx';
+
+/* ---------------- 連線 ---------------- */
+function setConn(on,txt){ $('#conn').classList.toggle('on',on); $('#connTxt').textContent = txt || (on?'已連線':'未連線'); }
+function connect(brokerKey, onReady){
+  connBroker = brokerKey;
+  if(client){ try{client.end(true);}catch(e){} }
+  setConn(false,'連線中…');
+  client = mqtt.connect(BROKERS[brokerKey].url, {clientId:'cs_'+uid()+uid(), clean:true, reconnectPeriod:2000, keepalive:30});
+  client.on('connect', ()=>{ setConn(true); if(onReady){const f=onReady; onReady=null; f();} resub(); });
+  client.on('reconnect', ()=>setConn(false,'重新連線中…'));
+  client.on('close', ()=>setConn(false,'連線中斷'));
+  client.on('message', onMsg);
+}
+function resub(){
+  if(!room) return;
+  if(role==='host'){ client.subscribe(`caoshan2/${room}/c2h`); broadcast(); }
+  else if(role==='player'){ client.subscribe(`caoshan2/${room}/state`); sendC2H({type:'join', name:me.name}); }
+}
+function sendC2H(obj){
+  if(!client||!room||!me) return;
+  client.publish(`caoshan2/${room}/c2h`, JSON.stringify({mid:uid(), pid:me.id, ts:now(), ...obj}));
+}
+
+/* =========================================================
+   主持人端
+   ========================================================= */
+function newHostState(code){
+  return {
+    room:code, phase:'lobby', sub:'', seq:0,
+    players:{},            // id:{name,score}
+    stupid:[],             // {id,author,text,used}
+    life:[],               // {id,owner,q,correct,decoys[],used}
+    box:[],                // {id,level,text,used}
+    cur:null,              // 當前回合
+    seen:[],               // 訊息去重
+  };
+}
+function hostSave(){ if(H) localStorage.setItem('cs_host_'+H.room, JSON.stringify(H)); }
+function hostStart(code, restore){
+  role='host'; document.body.classList.add('host');
+  H = restore || newHostState(code);
+  room = H.room;
+  connect(connBroker, ()=>{ broadcast(); renderHost(); });
+  renderHost();
+}
+function players(){ return Object.entries(H.players).map(([id,p])=>({id,...p})); }
+function pName(id){ return H.players[id] ? H.players[id].name : '？'; }
+
+/* 建立公開狀態並廣播（retained） */
+function buildPub(){
+  const ps = players().map(p=>({id:p.id,name:p.name,score:p.score,
+    st:H.stupid.some(x=>x.author===p.id), lf:H.life.some(x=>x.owner===p.id),
+    bx:H.box.filter(x=>x.author===p.id).length }));
+  const pub = {seq:++H.seq, room:H.room, phase:H.phase, sub:H.sub, players:ps, data:{}};
+  const c = H.cur;
+  if(H.phase==='s1' && c){
+    if(H.sub==='vote') pub.data={qid:c.qid, text:c.text, voted:Object.keys(c.votes)};
+    if(H.sub==='reveal') pub.data=c.reveal;
+  }
+  if(H.phase==='s2' && c){
+    if(H.sub==='vote') pub.data={qid:c.qid, text:c.text, ownerId:c.owner, ownerName:pName(c.owner), options:c.options, voted:Object.keys(c.votes)};
+    if(H.sub==='reveal') pub.data=c.reveal;
+  }
+  if(H.phase==='s3' && c){
+    if(H.sub==='ask') pub.data={qid:c.qid, level:c.level, text:c.text, targetId:c.target, targetName:pName(c.target),
+      canDesignate:(H.players[c.target]?.score??0)>=0, stage:c.stage, designatorName:c.designator?pName(c.designator):null};
+    if(H.sub==='reveal') pub.data=c.reveal;
+  }
+  if(H.phase==='final'){
+    const rk = players().sort((a,b)=>b.score-a.score);
+    pub.data={ranking:rk.map(p=>({name:p.name,score:p.score}))};
+  }
+  return pub;
+}
+function broadcast(){
+  if(!client||!client.connected||!H) return;
+  client.publish(`caoshan2/${H.room}/state`, JSON.stringify(buildPub()), {retain:true});
+  hostSave();
+}
+function bump(id,d){ if(H.players[id]){ H.players[id].score+=d; } }
+
+/* 主持人收玩家訊息 */
+function hostOnMsg(m){
+  if(H.seen.includes(m.mid)) return;
+  H.seen.push(m.mid); if(H.seen.length>80) H.seen.shift();
+  const pid = m.pid;
+  switch(m.type){
+    case 'join':
+      if(!H.players[pid]) H.players[pid]={name:(m.name||'玩家').slice(0,12), score:0};
+      else H.players[pid].name=(m.name||H.players[pid].name).slice(0,12);
+      break;
+    case 'stupid':
+      if(H.phase!=='lobby') return;
+      if(H.stupid.some(x=>x.author===pid)) return;
+      H.stupid.push({id:uid(), author:pid, text:String(m.text||'').slice(0,160), used:false});
+      break;
+    case 'life':
+      if(!['lobby','s1'].includes(H.phase)) return;
+      if(H.life.some(x=>x.owner===pid)) return;
+      H.life.push({id:uid(), owner:pid, q:String(m.q||'').slice(0,120), correct:String(m.correct||'').slice(0,40),
+        decoys:(m.decoys||[]).slice(0,3).map(x=>String(x).slice(0,40)), used:false});
+      break;
+    case 'box':
+      if(H.phase==='final') return;
+      H.box.push({id:uid(), author:pid, level:[1,2,3].includes(m.level)?m.level:1, text:String(m.text||'').slice(0,160), used:false});
+      break;
+    case 'vote':{
+      const c=H.cur;
+      if(!c || m.qid!==c.qid || H.sub!=='vote') return;
+      if(H.phase==='s2' && pid===c.owner) return;      // 本人不投
+      if(!H.players[pid]) return;
+      c.votes[pid]=m.choice;
+      break;
+    }
+    case 's3act':{
+      const c=H.cur;
+      if(!c || H.phase!=='s3' || H.sub!=='ask' || m.qid!==c.qid) return;
+      if(pid!==c.target) return;   // 只有當前被問的人能操作（指定後 target 已轉為被指定者）
+      s3Apply(m.action, pid, m.designee);
+      return; // s3Apply 內含 broadcast
+    }
+  }
+  broadcast(); renderHost();
+}
+
+/* ---- 第一階段 ---- */
+function s1Next(){
+  const pool = H.stupid.filter(x=>!x.used);
+  if(!pool.length){ alert('蠢事題庫已用完'); return; }
+  const q = pool[Math.floor(Math.random()*pool.length)];
+  H.phase='s1'; H.sub='vote';
+  H.cur={type:'s1', qid:uid(), srcId:q.id, text:q.text, author:q.author, votes:{}};
+  broadcast(); renderHost();
+}
+function s1Reveal(){
+  const c=H.cur; if(!c) return;
+  const src=H.stupid.find(x=>x.id===c.srcId); if(src) src.used=true;
+  const deltas=[];
+  const voters=Object.entries(c.votes).filter(([pid])=>pid!==c.author);
+  const correct=voters.filter(([,ch])=>ch===c.author);
+  correct.forEach(([pid])=>{ bump(pid,1); deltas.push({name:pName(pid), d:+1}); });
+  if(correct.length===0){ bump(c.author,2); deltas.push({name:pName(c.author), d:+2, note:'無人猜中'}); }
+  const tally={}; voters.forEach(([,ch])=>{ tally[ch]=(tally[ch]||0)+1; });
+  c.reveal={text:c.text, authorId:c.author, authorName:pName(c.author),
+    tally:Object.entries(tally).map(([id,n])=>({name:pName(id),n})), deltas};
+  H.sub='reveal';
+  broadcast(); renderHost();
+}
+
+/* ---- 第二階段 ---- */
+function s2Next(){
+  const pool=H.life.filter(x=>!x.used);
+  if(!pool.length){ alert('交換人生題庫已用完'); return; }
+  const q=pool[Math.floor(Math.random()*pool.length)];
+  const opts=[q.correct,...q.decoys].filter(Boolean);
+  for(let i=opts.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[opts[i],opts[j]]=[opts[j],opts[i]];}
+  H.phase='s2'; H.sub='vote';
+  H.cur={type:'s2', qid:uid(), srcId:q.id, text:q.q, owner:q.owner, options:opts, correctIdx:opts.indexOf(q.correct), votes:{}};
+  broadcast(); renderHost();
+}
+function s2Reveal(){
+  const c=H.cur; if(!c) return;
+  const src=H.life.find(x=>x.id===c.srcId); if(src) src.used=true;
+  const voters=Object.entries(c.votes).filter(([pid])=>pid!==c.owner);
+  const wrong=voters.filter(([,ch])=>ch!==c.correctIdx);
+  const deltas=[];
+  let note='大家都知道，+0';
+  if(voters.length>0 && wrong.length===voters.length){ bump(c.owner,2); deltas.push({name:pName(c.owner),d:+2,note:'全場都不知道'}); note=''; }
+  else if(wrong.length>0){ bump(c.owner,1); deltas.push({name:pName(c.owner),d:+1,note:'有人不知道'}); note=''; }
+  const tally=c.options.map((o,i)=>({text:o, n:voters.filter(([,ch])=>ch===i).length, correct:i===c.correctIdx}));
+  c.reveal={text:c.text, ownerName:pName(c.owner), options:c.options, correctIdx:c.correctIdx, tally, deltas, note};
+  H.sub='reveal';
+  broadcast(); renderHost();
+}
+
+/* ---- 第三階段 ---- */
+function s3Ask(boxId, targetId){
+  const q=H.box.find(x=>x.id===boxId); if(!q) return;
+  H.phase='s3'; H.sub='ask';
+  H.cur={type:'s3', qid:uid(), srcId:q.id, level:q.level, text:q.text, target:targetId, stage:'choose', designator:null};
+  broadcast(); renderHost();
+}
+function s3Apply(action, pid, designee){
+  const c=H.cur; if(!c) return;
+  const deltas=[];
+  const finish = label=>{
+    const src=H.box.find(x=>x.id===c.srcId); if(src) src.used=true;
+    c.reveal={level:c.level, text:c.text, label, deltas};
+    H.sub='reveal'; broadcast(); renderHost();
+  };
+  if(c.stage==='choose'){
+    if(action==='answer'){ bump(pid,1); deltas.push({name:pName(pid),d:+1,note:'回答'}); finish(`${pName(pid)} 選擇回答`); }
+    else if(action==='drink'){ bump(pid,-1); deltas.push({name:pName(pid),d:-1,note:'喝一口 / Pass'}); finish(`${pName(pid)} 喝一口跳過`); }
+    else if(action==='designate'){
+      if((H.players[pid]?.score??0) < 0) return;               // 負分不可指定
+      if(!designee || designee===pid || !H.players[designee]) return;
+      bump(pid,-2); deltas.push({name:pName(pid),d:-2,note:'指定回答'});
+      c.stage='designated'; c.designator=pid; c.target=designee; c.pendDeltas=deltas;
+      broadcast(); renderHost();
+    }
+  } else if(c.stage==='designated'){
+    const all=c.pendDeltas||[];
+    if(action==='answer'){ bump(pid,1); all.push({name:pName(pid),d:+1,note:'回答'}); deltas.push(...all); finish(`${pName(c.designator)} 指定 → ${pName(pid)} 回答`); }
+    else if(action==='drink'){ bump(pid,-1); all.push({name:pName(pid),d:-1,note:'喝一口 / Pass'}); deltas.push(...all); finish(`${pName(c.designator)} 指定 → ${pName(pid)} 喝一口跳過`); }
+  }
+}
+function toFinal(){ H.phase='final'; H.sub=''; H.cur=null; broadcast(); renderHost(); }
+
+/* =========================================================
+   畫面：共用
+   ========================================================= */
+function stagebar(phase){
+  const on=k=>phase===k?'on':'';
+  return `<div class="stagebar">
+    <span class="${on('s1')}">🌒 蠢事</span><span class="${on('s2')}">🌓 交換人生</span>
+    <span class="${on('s3')}">🌕 問題箱</span><span class="${on('final')}">🏆 結算</span></div>`;
+}
+function deltasHtml(deltas){
+  if(!deltas||!deltas.length) return '';
+  return `<div class="deltas">`+deltas.map((d,i)=>
+    `<div class="delta" style="animation-delay:${i*0.25}s"><span>${esc(d.name)}${d.note?`<span class="small-note">（${esc(d.note)}）</span>`:''}</span><b class="${d.d>=0?'pos':'neg'}">${d.d>=0?'+':''}${d.d}</b></div>`).join('')+`</div>`;
+}
+function rankTable(list, adjustable){
+  const rows=list.slice().sort((a,b)=>b.score-a.score).map((p,i)=>`
+    <tr><td>${i===0?'🏆':(i===list.length-1&&list.length>1?'💀':(i+1))}</td>
+      <td>${esc(p.name)}</td>
+      <td class="sc ${p.score>=0?'pos':'neg'}">${p.score>=0?'+':''}${p.score}</td>
+      ${adjustable?`<td class="adj"><button onclick="adj('${p.id}',-1)">−</button><button onclick="adj('${p.id}',1)">＋</button></td>`:''}</tr>`).join('');
+  return `<table class="rank">${rows||'<tr><td class="small-note">尚無玩家</td></tr>'}</table>`;
+}
+window.adj=(id,d)=>{ bump(id,d); broadcast(); renderHost(); };
+
+/* =========================================================
+   畫面：首頁
+   ========================================================= */
+function renderHome(){
+  const url=new URL(location.href);
+  const preRoom=(url.searchParams.get('room')||'').toUpperCase();
+  const saved=JSON.parse(localStorage.getItem('cs_me')||'null');
+  const hostRooms=Object.keys(localStorage).filter(k=>k.startsWith('cs_host_')).map(k=>k.slice(8));
+  $('#app').innerHTML=`
+    <div style="padding:26px 0 6px">
+      <div class="eyebrow">草 山 夜 未 眠</div>
+      <h1 class="logo">交換人生<small>一 晚 限 定</small></h1>
+    </div>
+    <div class="card">
+      <h3>加入房間</h3>
+      <label class="f">房間代碼</label>
+      <input type="text" id="jRoom" maxlength="4" style="text-transform:uppercase;letter-spacing:.4em;text-align:center;font-size:22px" value="${esc(preRoom)}" placeholder="ABCD">
+      <label class="f">你的名字</label>
+      <input type="text" id="jName" maxlength="12" value="${esc(saved&&saved.name||'')}" placeholder="現場大家叫你什麼">
+      <div style="margin-top:14px"><button class="btn primary" onclick="joinRoom()">🚪 進入房間</button></div>
+    </div>
+    <div class="card">
+      <h3>我是主持人</h3>
+      <label class="f">連線伺服器</label>
+      <select id="hBroker">${Object.entries(BROKERS).map(([k,b])=>`<option value="${k}">${b.name}</option>`).join('')}</select>
+      <div style="margin-top:14px"><button class="btn" onclick="createRoom()">🎤 建立新房間</button></div>
+      ${hostRooms.map(r=>`<div style="margin-top:10px"><button class="btn ghost" onclick="resumeRoom('${r}')">↩︎ 繼續主持房間 ${r}</button></div>`).join('')}
+    </div>
+    <p class="hint center">三階段：最近的蠢事 → 交換人生 → 匿名問題箱<br>最高分「人生贏家」，最低分「人生最離譜」🌙</p>`;
+}
+window.createRoom=()=>{
+  connBroker=$('#hBroker').value;
+  const code=Array.from({length:4},()=> 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join('');
+  hostStart(code,null);
+};
+window.resumeRoom=(r)=>{
+  const st=JSON.parse(localStorage.getItem('cs_host_'+r)||'null');
+  if(st) hostStart(r,st); 
+};
+window.joinRoom=()=>{
+  const r=($('#jRoom').value||'').trim().toUpperCase();
+  const n=($('#jName').value||'').trim();
+  if(r.length!==4){ alert('請輸入 4 碼房間代碼'); return; }
+  if(!n){ alert('請輸入名字'); return; }
+  const saved=JSON.parse(localStorage.getItem('cs_me')||'null');
+  me = (saved && saved.room===r) ? {id:saved.id, name:n} : {id:uid()+uid(), name:n};
+  localStorage.setItem('cs_me', JSON.stringify({room:r,id:me.id,name:n}));
+  role='player'; room=r; PUB=null;
+  const b=new URL(location.href).searchParams.get('b');
+  connect(BROKERS[b]?b:connBroker, ()=>{});
+  renderPlayer();
+  setTimeout(()=>{ if(!PUB && role==='player') $('#pWarn')?.classList.remove('hidden'); }, 6000);
+};
+
+/* =========================================================
+   畫面：主持人端
+   ========================================================= */
+function renderHost(){
+  if(role!=='host'||!H) return;
+  const link=(()=>{ const u=new URL(location.href); u.searchParams.set('room',H.room); u.searchParams.set('b',connBroker); return u.href; })();
+  const ps=players();
+  let panel='';
+
+  if(H.phase==='lobby'){
+    panel=`<div class="card"><h3>① 開場前</h3>
+      <div class="roomcode">${H.room}</div>
+      <div id="qrbox"></div>
+      <button class="btn sm ghost" onclick="copyLink('${esc(link)}')">📋 複製玩家連結</button>
+      <div class="divider"></div>
+      <p class="small-note">投稿進度：蠢事 ${H.stupid.length}／交換人生 ${H.life.length}／問題箱 ${H.box.length}</p>
+      <div style="margin-top:12px"><button class="btn primary" onclick="s1Next()" ${H.stupid.length?'':'disabled'}>🌒 開始第一階段：最近的蠢事</button></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn sm ghost" onclick="s2Next()" ${H.life.length?'':'disabled'}>跳到第二階段</button>
+        <button class="btn sm ghost" onclick="H.phase='s3';H.sub='';H.cur=null;broadcast();renderHost()">跳到第三階段</button>
+      </div>
+    </div>`;
+  }
+  if(H.phase==='s1'){
+    const c=H.cur;
+    if(H.sub==='vote') panel=`<div class="card"><h3>🌒 第一階段・投票中</h3>
+      <p class="big-q">「${esc(c.text)}」</p>
+      <p class="small-note center">正解：<b style="color:var(--ember)">${esc(pName(c.author))}</b>（只有你看得到）</p>
+      <p class="center small-note">已投票 ${Object.keys(c.votes).length} / ${ps.length} 人</p>
+      <div style="margin-top:12px"><button class="btn primary" onclick="s1Reveal()">🎉 公布答案</button></div></div>`;
+    else panel=`<div class="card"><h3>🌒 第一階段・已公布</h3>
+      ${deltasHtml(c.reveal.deltas)}
+      <div class="row" style="margin-top:14px">
+        <button class="btn" onclick="s1Next()" ${H.stupid.some(x=>!x.used)?'':'disabled'}>下一題（剩 ${H.stupid.filter(x=>!x.used).length}）</button>
+        <button class="btn mist" onclick="s2Next()" ${H.life.length?'':'disabled'}>🌓 進入第二階段</button>
+      </div></div>`;
+  }
+  if(H.phase==='s2'){
+    const c=H.cur;
+    if(H.sub==='vote') panel=`<div class="card"><h3>🌓 第二階段・投票中</h3>
+      <p class="big-q">${esc(pName(c.owner))}：「${esc(c.text)}」</p>
+      <p class="small-note center">正解：<b style="color:var(--mist)">${esc(c.options[c.correctIdx])}</b>（只有你看得到）</p>
+      <p class="center small-note">已投票 ${Object.keys(c.votes).length} / ${Math.max(ps.length-1,0)} 人（本人不投）</p>
+      <div style="margin-top:12px"><button class="btn mist" onclick="s2Reveal()">🎉 公布答案</button></div></div>`;
+    else panel=`<div class="card"><h3>🌓 第二階段・已公布</h3>
+      ${c.reveal.note?`<p class="center small-note">${esc(c.reveal.note)}</p>`:''}
+      ${deltasHtml(c.reveal.deltas)}
+      <div class="row" style="margin-top:14px">
+        <button class="btn" onclick="s2Next()" ${H.life.some(x=>!x.used)?'':'disabled'}>下一題（剩 ${H.life.filter(x=>!x.used).length}）</button>
+        <button class="btn hell" onclick="H.phase='s3';H.sub='';H.cur=null;broadcast();renderHost()">🌕 進入第三階段</button>
+      </div></div>`;
+  }
+  if(H.phase==='s3'){
+    const c=H.cur;
+    let cur='';
+    if(H.sub==='ask'&&c){
+      cur = c.stage==='choose'
+        ? `<div class="banner hell">等待 ${esc(pName(c.target))} 抉擇中…</div>`
+        : `<div class="banner hell">${esc(pName(c.designator))} 指定了 ${esc(pName(c.target))}，等待其抉擇…</div>`;
+      cur = `<p class="big-q"><span class="tag ${LV[c.level].tag}">${LV[c.level].name}</span><br>「${esc(c.text)}」</p>`+cur;
+    }
+    if(H.sub==='reveal'&&c){
+      cur=`<p class="center small-note">${esc(c.reveal.label)}</p>${deltasHtml(c.reveal.deltas)}
+        <div class="divider"></div>`;
+    }
+    const pool=[1,2,3].map(lv=>{
+      const items=H.box.filter(x=>x.level===lv);
+      if(!items.length) return '';
+      return `<div style="margin-top:10px"><span class="tag ${LV[lv].tag}">${LV[lv].name}</span>`+
+        items.map(q=>`<div class="pool-item ${q.used?'used':''}">
+          <div class="txt">${esc(q.text)}</div>
+          ${q.used?'<span class="small-note">已使用</span>':`
+          <div class="ops">
+            <select id="tg_${q.id}" style="width:auto;padding:7px 10px;font-size:14px">
+              <option value="">指定對象…</option>
+              <option value="__rand__">🎲 隨機</option>
+              ${ps.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+            </select>
+            <button class="btn sm hell" onclick="hostAsk('${q.id}')">出題</button>
+            <button class="btn sm ghost" onclick="editBox('${q.id}')">✏️</button>
+            <button class="btn sm ghost" onclick="lvBox('${q.id}')">Lv切換</button>
+            <button class="btn sm ghost" onclick="delBox('${q.id}')">🗑️</button>
+          </div>`}
+        </div>`).join('')+`</div>`;
+    }).join('');
+    panel=`<div class="card"><h3>🌕 第三階段・匿名問題箱</h3>
+      ${cur}
+      <button class="btn sm ghost" onclick="addBox()">＋ 主持人加題</button>
+      ${pool||'<p class="small-note">目前沒有題目，可請玩家在手機投稿，或自行加題。</p>'}
+      <div class="divider"></div>
+      <button class="btn primary" onclick="toFinal()">🏁 結束遊戲，公布結果</button>
+    </div>`;
+  }
+  if(H.phase==='final'){
+    const rk=ps.slice().sort((a,b)=>b.score-a.score);
+    panel=`<div class="card"><h3>🏁 結算</h3>
+      ${rk.length?`<div class="final-hero"><div class="t">人 生 贏 家</div><div class="name">🏆 ${esc(rk[0].name)}</div><div class="sc" style="color:var(--ember)">${rk[0].score>=0?'+':''}${rk[0].score}</div></div>`:''}
+      ${rk.length>1?`<div class="final-hero"><div class="t">人 生 最 離 譜</div><div class="name">💀 ${esc(rk[rk.length-1].name)}</div><div class="sc" style="color:var(--hell)">${rk[rk.length-1].score>=0?'+':''}${rk[rk.length-1].score}</div></div>`:''}
+      <div class="divider"></div>
+      <button class="btn ghost" onclick="closeRoom()">🗑️ 關閉並清除房間</button>
+    </div>`;
+  }
+
+  $('#app').innerHTML=`
+    <div class="topbar"><div class="who">主持人台 <b>房間 ${H.room}</b></div>
+      <span class="tag">${PHASES[H.phase]}${H.sub?'・'+({vote:'投票',reveal:'公布',ask:'抉擇'}[H.sub]||''):''}</span></div>
+    ${stagebar(H.phase)}
+    ${panel}
+    <div class="card"><h3>📊 即時排名（可手動調整）</h3>${rankTable(ps,true)}
+      <div class="plist" style="margin-top:10px">${ps.map(p=>`<span class="pchip">${esc(p.name)} <span class="mytag">${['蠢','題','箱'].map((t,i)=>[p?H.stupid.some(x=>x.author===p.id):0,H.life.some(x=>x.owner===p.id),H.box.some(x=>x.author===p.id)][i]?`<span class="ok">${t}✓</span>`:'').join(' ')}</span></span>`).join('')||'<span class="small-note">等待玩家掃碼加入…</span>'}</div>
+    </div>
+    ${H.phase!=='lobby'?`<div class="card"><h3>🔗 邀請</h3><div class="roomcode" style="font-size:22px">${H.room}</div><div id="qrbox"></div></div>`:''}`;
+  const qb=$('#qrbox');
+  if(qb){ qb.innerHTML=''; new QRCode(qb,{text:link,width:170,height:170,colorDark:'#14132A',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }
+}
+window.copyLink=t=>{ navigator.clipboard?.writeText(t); alert('已複製連結'); };
+window.hostAsk=(qid)=>{
+  let tg=$('#tg_'+qid).value;
+  if(!tg){ alert('請先選擇指定對象'); return; }
+  const ps=players();
+  if(tg==='__rand__') tg=ps[Math.floor(Math.random()*ps.length)].id;
+  s3Ask(qid,tg);
+};
+window.addBox=()=>{
+  const t=prompt('題目內容？'); if(!t) return;
+  const lv=parseInt(prompt('等級？輸入 1 / 2 / 3','1'))||1;
+  H.box.push({id:uid(),author:'host',level:[1,2,3].includes(lv)?lv:1,text:t.slice(0,160),used:false});
+  broadcast(); renderHost();
+};
+window.editBox=(id)=>{ const q=H.box.find(x=>x.id===id); if(!q) return;
+  const t=prompt('編輯題目：',q.text); if(t){ q.text=t.slice(0,160); broadcast(); renderHost(); } };
+window.lvBox=(id)=>{ const q=H.box.find(x=>x.id===id); if(!q) return; q.level=q.level%3+1; broadcast(); renderHost(); };
+window.delBox=(id)=>{ if(!confirm('刪除這題？')) return; H.box=H.box.filter(x=>x.id!==id); broadcast(); renderHost(); };
+window.closeRoom=()=>{
+  if(!confirm('關閉房間並清除紀錄？')) return;
+  client.publish(`caoshan2/${H.room}/state`,'',{retain:true});
+  localStorage.removeItem('cs_host_'+H.room);
+  location.href=location.pathname;
+};
+
+/* =========================================================
+   畫面：玩家端
+   ========================================================= */
+function myPub(){ return PUB?.players.find(p=>p.id===me.id); }
+function renderPlayer(){
+  if(role!=='player') return;
+  const p=myPub();
+  const score=p?p.score:0;
+  let body='';
+  if(!PUB){
+    body=`<div class="card center"><p class="wait-dot">正在尋找房間 ${esc(room)}</p>
+      <p id="pWarn" class="hint hidden" style="color:var(--hell)">找不到房間。請確認代碼正確、主持人已開房，且雙方使用同一個伺服器。</p></div>`;
+  } else {
+    body = playerPhaseHtml() + submitFormsHtml() + `<div class="card"><h3>🌙 現場排名</h3>${rankTable(PUB.players,false)}</div>`;
+  }
+  $('#app').innerHTML=`
+    <div class="topbar">
+      <div class="who">房間 ${esc(room)}<br><b>${esc(me.name)}</b></div>
+      <div class="moonchip ${score<0?'neg':''}"><span class="n">${score>=0?'+':''}${score}</span><span class="t">分數</span></div>
+    </div>
+    ${PUB?stagebar(PUB.phase):''}
+    ${body}`;
+}
+function playerPhaseHtml(){
+  const d=PUB.data||{}; const ph=PUB.phase, sub=PUB.sub;
+  if(ph==='lobby'){
+    return `<div class="card center"><h3>🌌 等待室</h3>
+      <p>大家陸續上山中，先完成下面的匿名投稿吧。</p>
+      <div class="plist" style="justify-content:center;margin-top:10px">${PUB.players.map(x=>`<span class="pchip">${esc(x.name)}</span>`).join('')}</div></div>`;
+  }
+  if(ph==='s1'){
+    if(sub==='vote'){
+      const voted = myVote[d.qid]!==undefined;
+      return `<div class="card"><h3>🌒 最近的蠢事</h3>
+        <p class="big-q">「${esc(d.text)}」</p>
+        <p class="center small-note">你覺得是誰？</p>
+        <div class="opts">${PUB.players.map(x=>`<button class="opt ${myVote[d.qid]===x.id?'sel':''} ${voted&&myVote[d.qid]!==x.id?'dis':''}" onclick="castVote('${d.qid}','${x.id}')">${esc(x.name)}</button>`).join('')}</div>
+        ${voted?`<p class="center small-note" style="margin-top:12px">✓ 已投票，等待其他人（${d.voted.length}/${PUB.players.length}）</p>`:''}</div>`;
+    }
+    if(sub==='reveal') return `<div class="card"><h3>🌒 答案揭曉</h3>
+      <p class="big-q">「${esc(d.text)}」</p>
+      <div class="banner ember">🎉 是 ${esc(d.authorName)}！</div>
+      ${d.tally.length?`<p class="small-note center">${d.tally.map(t=>`${esc(t.name)} ${t.n}票`).join('・')}</p>`:''}
+      ${deltasHtml(d.deltas)}</div>`;
+  }
+  if(ph==='s2'){
+    if(sub==='vote'){
+      if(d.ownerId===me.id) return `<div class="card center"><h3>🌓 交換人生</h3>
+        <p class="big-q">「${esc(d.text)}」</p><div class="banner mist">這題是你的！看大家怎麼猜 👀</div></div>`;
+      const voted=myVote[d.qid]!==undefined;
+      return `<div class="card"><h3>🌓 交換人生</h3>
+        <p class="center small-note">關於 <b>${esc(d.ownerName)}</b> 的問題</p>
+        <p class="big-q">「${esc(d.text)}」</p>
+        <div class="opts one">${d.options.map((o,i)=>`<button class="opt ${myVote[d.qid]===i?'sel':''} ${voted&&myVote[d.qid]!==i?'dis':''}" onclick="castVote('${d.qid}',${i})">${'ABCD'[i]}. ${esc(o)}</button>`).join('')}</div>
+        ${voted?`<p class="center small-note" style="margin-top:12px">✓ 已投票，等待其他人（${d.voted.length}/${PUB.players.length-1}）</p>`:''}</div>`;
+    }
+    if(sub==='reveal') return `<div class="card"><h3>🌓 答案揭曉</h3>
+      <p class="center small-note">關於 <b>${esc(d.ownerName)}</b></p>
+      <p class="big-q">「${esc(d.text)}」</p>
+      <div class="opts one">${d.options.map((o,i)=>`<div class="opt ${i===d.correctIdx?'correct':'dis'}">${'ABCD'[i]}. ${esc(o)}<small>${d.tally[i].n} 票</small></div>`).join('')}</div>
+      ${d.note?`<p class="center small-note" style="margin-top:10px">${esc(d.note)}</p>`:''}
+      ${deltasHtml(d.deltas)}</div>`;
+  }
+  if(ph==='s3'){
+    if(sub==='ask'){
+      const isMe = d.targetId===me.id;
+      const head=`<p class="big-q"><span class="tag ${LV[d.level].tag}">${LV[d.level].name}</span><br>「${esc(d.text)}」</p>`;
+      if(!isMe) return `<div class="card"><h3>🌕 匿名問題箱</h3>${head}
+        <div class="banner hell">${d.stage==='designated'?`${esc(d.designatorName)} 指定了 ${esc(d.targetName)}！`:`輪到 ${esc(d.targetName)}`}<span class="wait-dot"> 抉擇中</span></div></div>`;
+      if(d.stage==='designated') return `<div class="card"><h3>🌕 你被指定了！</h3>${head}
+        <div class="banner hell">${esc(d.designatorName)} 把炸彈丟給你（不能再轉指）</div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn primary" onclick="s3Send('${d.qid}','answer')">🎤 回答 +1</button>
+          <button class="btn" onclick="s3Send('${d.qid}','drink')">🍺 喝一口 / Pass −1</button>
+        </div></div>`;
+      return `<div class="card"><h3>🌕 輪到你了</h3>${head}
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+          <button class="btn primary" onclick="s3Send('${d.qid}','answer')">🎤 回答 +1</button>
+          <button class="btn" onclick="s3Send('${d.qid}','drink')">🍺 喝一口 / Pass −1</button>
+          <button class="btn hell" onclick="togglePick()" ${d.canDesignate?'':'disabled'}>💣 指定別人回答 −2${d.canDesignate?'':'（負分不可用）'}</button>
+          <div id="pickBox" class="hidden">
+            <p class="small-note center">丟給誰？</p>
+            <div class="opts">${PUB.players.filter(x=>x.id!==me.id).map(x=>`<button class="opt" onclick="s3Send('${d.qid}','designate','${x.id}')">${esc(x.name)}</button>`).join('')}</div>
+          </div>
+        </div></div>`;
+    }
+    if(sub==='reveal') return `<div class="card"><h3>🌕 結果</h3>
+      <p class="big-q"><span class="tag ${LV[d.level].tag}">${LV[d.level].name}</span><br>「${esc(d.text)}」</p>
+      <p class="center small-note">${esc(d.label)}</p>
+      ${deltasHtml(d.deltas)}
+      <p class="center small-note wait-dot" style="margin-top:10px">等待主持人下一題</p></div>`;
+    return `<div class="card center"><h3>🌕 匿名問題箱</h3><p class="wait-dot">主持人正在抽題</p></div>`;
+  }
+  if(ph==='final'){
+    const rk=d.ranking||[];
+    return `<div class="card">
+      ${rk.length?`<div class="final-hero"><div class="t">人 生 贏 家</div><div class="name">🏆 ${esc(rk[0].name)}</div><div class="sc" style="color:var(--ember)">${rk[0].score>=0?'+':''}${rk[0].score}</div></div>`:''}
+      ${rk.length>1?`<div class="final-hero"><div class="t">人 生 最 離 譜</div><div class="name">💀 ${esc(rk[rk.length-1].name)}</div><div class="sc" style="color:var(--hell)">${rk[rk.length-1].score>=0?'+':''}${rk[rk.length-1].score}</div></div>`:''}
+      <p class="center hint">今晚辛苦了，草山的風替大家保密 🌙</p></div>`;
+  }
+  return `<div class="card center wait-dot">同步中</div>`;
+}
+
+/* 投稿表單（依階段條件顯示） */
+function submitFormsHtml(){
+  const p=myPub(); if(!p) return '';
+  const ph=PUB.phase;
+  let forms='';
+  if(ph==='lobby'){
+    forms += p.st
+      ? `<div class="donebox">✓ 蠢事已投稿（匿名）</div>`
+      : `<label class="f">😂 最近發生的一件蠢事（30～80字，真事、別寫名字）</label>
+         <textarea id="fStupid" maxlength="160" placeholder="例：上班前買咖啡，到公司才發現自己穿拖鞋。"></textarea>
+         <div style="margin-top:8px"><button class="btn sm primary" onclick="subStupid()">匿名投稿</button></div><div class="divider"></div>`;
+  }
+  if(['lobby','s1'].includes(ph)){
+    forms += p.lf
+      ? `<div class="donebox" style="margin-top:10px">✓ 交換人生題目已投稿</div>`
+      : `<label class="f">🃏 出一道關於你自己的問題（答案要是至少一位朋友可能不知道的事）</label>
+         <input type="text" id="fLifeQ" maxlength="120" placeholder="例：我國中時最想當什麼職業？">
+         <label class="f">正確答案</label><input type="text" id="fLifeA" maxlength="40" placeholder="例：音樂家">
+         <label class="f">三個煙霧彈選項</label>
+         <input type="text" id="fLifeD1" maxlength="40" placeholder="假選項 1" style="margin-bottom:6px">
+         <input type="text" id="fLifeD2" maxlength="40" placeholder="假選項 2" style="margin-bottom:6px">
+         <input type="text" id="fLifeD3" maxlength="40" placeholder="假選項 3">
+         <div style="margin-top:8px"><button class="btn sm mist" onclick="subLife()">投稿題目</button></div><div class="divider"></div>`;
+  }
+  if(ph!=='final'){
+    forms += `<label class="f">💀 匿名問題箱（可投多題，目前已投 ${p.bx} 題）</label>
+      <select id="fBoxLv" style="margin-bottom:6px">
+        <option value="1">🟢 Lv.1 小菜</option><option value="2">🟡 Lv.2 有點東西</option><option value="3">🔴 Lv.3 地獄</option>
+      </select>
+      <textarea id="fBoxT" maxlength="160" placeholder="例：如果不用工作一年，你想做什麼？"></textarea>
+      <div style="margin-top:8px"><button class="btn sm hell" onclick="subBox()">匿名丟進箱子</button></div>`;
+  }
+  return forms?`<div class="card"><h3>📮 我的投稿</h3>${forms}</div>`:'';
+}
+window.subStupid=()=>{ const t=$('#fStupid').value.trim(); if(t.length<10){alert('再多寫一點吧（至少10字）');return;} sendC2H({type:'stupid',text:t}); };
+window.subLife=()=>{
+  const q=$('#fLifeQ').value.trim(), a=$('#fLifeA').value.trim();
+  const ds=[$('#fLifeD1').value.trim(),$('#fLifeD2').value.trim(),$('#fLifeD3').value.trim()].filter(Boolean);
+  if(!q||!a||ds.length<3){alert('題目、正確答案與三個假選項都要填喔');return;}
+  sendC2H({type:'life',q,correct:a,decoys:ds});
+};
+window.subBox=()=>{ const t=$('#fBoxT').value.trim(); if(!t){alert('先寫題目');return;}
+  sendC2H({type:'box',level:parseInt($('#fBoxLv').value),text:t}); $('#fBoxT').value=''; };
+window.castVote=(qid,choice)=>{ if(myVote[qid]!==undefined) return; myVote[qid]=choice; sendC2H({type:'vote',qid,choice}); renderPlayer(); };
+window.s3Send=(qid,action,designee)=>{ sendC2H({type:'s3act',qid,action,designee}); };
+window.togglePick=()=>{ $('#pickBox').classList.toggle('hidden'); };
+
+/* ---------------- 收訊分派 ---------------- */
+function onMsg(topic, payload){
+  let m; try{ m=JSON.parse(payload.toString()); }catch(e){ return; }
+  if(role==='host' && topic.endsWith('/c2h')) hostOnMsg(m);
+  if(role==='player' && topic.endsWith('/state')){
+    if(PUB && m.seq<PUB.seq) return;
+    PUB=m; renderPlayer();
+  }
+}
+
+/* ---------------- 啟動 ---------------- */
+renderHome();
+</script>
+</body>
+</html>
